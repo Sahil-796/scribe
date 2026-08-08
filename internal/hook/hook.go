@@ -84,7 +84,9 @@ func Run(r io.Reader, stderr io.Writer, enqueue EnqueueFunc) int {
 	}
 
 	if enqueue == nil {
-		fmt.Fprintln(stderr, "scribe hook: internal error: no enqueue function configured")
+		const reason = "internal error: no enqueue function configured"
+		fmt.Fprintln(stderr, "scribe hook: "+reason)
+		logFailure(root, FailureEntry{Time: time.Now().UTC(), SessionID: payload.SessionID, Reason: reason})
 		return ExitError
 	}
 
@@ -97,6 +99,14 @@ func Run(r io.Reader, stderr io.Writer, enqueue EnqueueFunc) int {
 
 	if err := enqueue(root, trigger); err != nil {
 		fmt.Fprintf(stderr, "scribe hook: enqueue failed: %v\n", err)
+		// This is the failure the open item (docs/findings/OPEN-ITEMS.md,
+		// item 11) worries about: the repo is initialised, the hook ran,
+		// but the trigger never made it into the queue, so the worker will
+		// never see this reply and the docs silently stop updating. Every
+		// other failure branch above returns before a repo root is known,
+		// so there's nowhere durable to log to yet — and Claude Code's own
+		// transcript already carries the stderr line for those.
+		logFailure(root, FailureEntry{Time: time.Now().UTC(), SessionID: payload.SessionID, Reason: fmt.Sprintf("enqueue failed: %v", err)})
 		return ExitError
 	}
 
