@@ -1,0 +1,48 @@
+timestamp=2026-08-08T14:42:28.928Z level=INFO run=b14e5ffe message="creating instance" directory=/Users/sahil/work/pa/experiments/00-writer-probe
+timestamp=2026-08-08T14:42:28.928Z level=INFO run=b14e5ffe message=fromDirectory directory=/Users/sahil/work/pa/experiments/00-writer-probe
+timestamp=2026-08-08T14:42:28.969Z level=INFO run=b14e5ffe message=bootstrapping directory=/Users/sahil/work/pa/experiments/00-writer-probe
+timestamp=2026-08-08T14:42:28.972Z level=INFO run=b14e5ffe message=loading path=/Users/sahil/.config/opencode/config.json
+timestamp=2026-08-08T14:42:28.972Z level=INFO run=b14e5ffe message=loading path=/Users/sahil/.config/opencode/opencode.json
+timestamp=2026-08-08T14:42:28.975Z level=INFO run=b14e5ffe message=loading path=/Users/sahil/.config/opencode/opencode.jsonc
+timestamp=2026-08-08T14:42:29.476Z level=INFO run=b14e5ffe message="all LSPs are disabled"
+timestamp=2026-08-08T14:42:29.478Z level=INFO run=b14e5ffe message="all formatters are disabled"
+timestamp=2026-08-08T14:42:29.478Z level=INFO run=b14e5ffe message=init
+timestamp=2026-08-08T14:42:29.559Z level=INFO run=b14e5ffe message=created id=ses_01e2cb1c8ffeR7gCLy47MWF6HH slug=crisp-harbor version=1.18.15 projectID=a30894b553a4f0e6b54869dfd10ddb1718cc0df6 directory=/Users/sahil/work/pa/experiments/00-writer-probe path=experiments/00-writer-probe workspaceID=undefined parentID=undefined title="New session - 2026-08-08T14:42:29.559Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1786200149559 time.updated=1786200149559
+timestamp=2026-08-08T14:42:29.566Z level=INFO run=b14e5ffe message="event connected"
+timestamp=2026-08-08T14:42:31.192Z level=INFO run=b14e5ffe message=loop session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH step=0
+timestamp=2026-08-08T14:42:31.203Z level=INFO run=b14e5ffe message=stream providerID=opencode modelID=gpt-5.4-nano session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH small=true agent=title mode=primary
+timestamp=2026-08-08T14:42:31.208Z level=INFO run=b14e5ffe message="llm runtime selected" llm.runtime=ai-sdk llm.provider=opencode llm.model=gpt-5.4-nano
+timestamp=2026-08-08T14:42:31.261Z level=INFO run=b14e5ffe message=tracking hash=0769eec6aeb1b01f92fdad2d33b316d885c57981 cwd=/Users/sahil/work/pa/experiments/00-writer-probe git=/Users/sahil/.local/share/opencode/snapshot/a30894b553a4f0e6b54869dfd10ddb1718cc0df6/12eef0c2ed8990de08463c715113d468b7717420
+timestamp=2026-08-08T14:42:31.264Z level=INFO run=b14e5ffe message="shell tool using shell" shell=/bin/zsh
+timestamp=2026-08-08T14:42:31.269Z level=WARN run=b14e5ffe message="duplicate skill name" name=vitest existing=/Users/sahil/.agents/skills/vitest/SKILL.md duplicate=/Users/sahil/.config/opencode/skills/vitest/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=seo-audit existing=/Users/sahil/.config/opencode/skills/seo-audit/SKILL.md duplicate=/Users/sahil/.agents/skills/seo-audit/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=frontend-design existing=/Users/sahil/.agents/skills/frontend-design/SKILL.md duplicate=/Users/sahil/.claude/skills/frontend-design/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=find-skills existing=/Users/sahil/.agents/skills/find-skills/SKILL.md duplicate=/Users/sahil/.config/opencode/skills/find-skills/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=seo-audit existing=/Users/sahil/.agents/skills/seo-audit/SKILL.md duplicate=/Users/sahil/.claude/skills/seo-audit/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=seo existing=/Users/sahil/.claude/skills/seo/SKILL.md duplicate=/Users/sahil/.agents/skills/seo/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=find-skills existing=/Users/sahil/.config/opencode/skills/find-skills/SKILL.md duplicate=/Users/sahil/.claude/skills/find-skills/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=programmatic-seo existing=/Users/sahil/.claude/skills/programmatic-seo/SKILL.md duplicate=/Users/sahil/.agents/skills/programmatic-seo/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=grill-me existing=/Users/sahil/.claude/skills/grill-me/SKILL.md duplicate=/Users/sahil/.agents/skills/grill-me/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=WARN run=b14e5ffe message="duplicate skill name" name=ai-seo existing=/Users/sahil/.agents/skills/ai-seo/SKILL.md duplicate=/Users/sahil/.claude/skills/ai-seo/SKILL.md
+timestamp=2026-08-08T14:42:31.270Z level=INFO run=b14e5ffe message=init count=14
+timestamp=2026-08-08T14:42:32.182Z level=INFO run=b14e5ffe message="watcher backend" directory=/Users/sahil/work/pa/experiments/00-writer-probe platform=darwin backend=fs-events
+timestamp=2026-08-08T14:42:32.190Z level=ERROR run=b14e5ffe message="stream error" providerID=opencode modelID=gpt-5.4-nano session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH small=true agent=title mode=primary error.error="AI_APICallError: No payment method. Add a payment method here: https://opencode.ai/workspace/wrk_01KHWTDR5QPTRCMQ5ATSVDPVVH/billing"
+timestamp=2026-08-08T14:42:32.198Z level=INFO run=b14e5ffe message="project copy refresh started" projectID=a30894b553a4f0e6b54869dfd10ddb1718cc0df6
+timestamp=2026-08-08T14:42:32.332Z level=INFO run=b14e5ffe message="project copy refresh done" projectID=a30894b553a4f0e6b54869dfd10ddb1718cc0df6 updated=[] removed=[]
+timestamp=2026-08-08T14:42:32.356Z level=INFO run=b14e5ffe message="booting location services" directory=/Users/sahil/work/pa/experiments/00-writer-probe workspaceID=undefined
+timestamp=2026-08-08T14:42:32.357Z level=INFO run=b14e5ffe message=process session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH messageID=msg_fe1d3549a001S4hpiyJJadZR55
+timestamp=2026-08-08T14:42:32.358Z level=INFO run=b14e5ffe message=stream providerID=opencode modelID=deepseek-v4-flash-free session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH small=false agent=build mode=primary
+timestamp=2026-08-08T14:42:32.360Z level=INFO run=b14e5ffe message="llm runtime selected" llm.runtime=ai-sdk llm.provider=opencode llm.model=deepseek-v4-flash-free
+timestamp=2026-08-08T14:42:55.150Z level=INFO run=b14e5ffe message=evaluated permission=edit pattern=experiments/00-writer-probe/probe-output-noauto2.txt action.permission=* action.action=allow action.pattern=*
+timestamp=2026-08-08T14:42:55.151Z level=INFO run=b14e5ffe message=formatting file=/Users/sahil/work/pa/experiments/00-writer-probe/probe-output-noauto2.txt
+timestamp=2026-08-08T14:42:55.152Z level=INFO run=b14e5ffe message="touching file" file=/Users/sahil/work/pa/experiments/00-writer-probe/probe-output-noauto2.txt
+timestamp=2026-08-08T14:42:55.241Z level=INFO run=b14e5ffe message=tracking hash=99273ad013cd9a8a1ec1075cfe5bea0511ab3d89 cwd=/Users/sahil/work/pa/experiments/00-writer-probe git=/Users/sahil/.local/share/opencode/snapshot/a30894b553a4f0e6b54869dfd10ddb1718cc0df6/12eef0c2ed8990de08463c715113d468b7717420
+timestamp=2026-08-08T14:42:55.290Z level=INFO run=b14e5ffe message=loop session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH step=1
+timestamp=2026-08-08T14:42:55.337Z level=INFO run=b14e5ffe message=tracking hash=e6b1cb22439bb13604393346a761b42cfafed528 cwd=/Users/sahil/work/pa/experiments/00-writer-probe git=/Users/sahil/.local/share/opencode/snapshot/a30894b553a4f0e6b54869dfd10ddb1718cc0df6/12eef0c2ed8990de08463c715113d468b7717420
+timestamp=2026-08-08T14:42:55.340Z level=INFO run=b14e5ffe message=process session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH messageID=msg_fe1d3b2bb001pH5Cg4Jj42lqNe
+timestamp=2026-08-08T14:42:55.341Z level=INFO run=b14e5ffe message=stream providerID=opencode modelID=deepseek-v4-flash-free session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH small=false agent=build mode=primary
+timestamp=2026-08-08T14:42:55.341Z level=INFO run=b14e5ffe message="llm runtime selected" llm.runtime=ai-sdk llm.provider=opencode llm.model=deepseek-v4-flash-free
+timestamp=2026-08-08T14:42:57.489Z level=INFO run=b14e5ffe message=tracking hash=7196e55f6698649bf0b40a902283d94e8904bff9 cwd=/Users/sahil/work/pa/experiments/00-writer-probe git=/Users/sahil/.local/share/opencode/snapshot/a30894b553a4f0e6b54869dfd10ddb1718cc0df6/12eef0c2ed8990de08463c715113d468b7717420
+timestamp=2026-08-08T14:42:57.541Z level=INFO run=b14e5ffe message=loop session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH step=2
+timestamp=2026-08-08T14:42:57.541Z level=INFO run=b14e5ffe message="exiting loop" session.id=ses_01e2cb1c8ffeR7gCLy47MWF6HH
+timestamp=2026-08-08T14:42:57.543Z level=INFO run=b14e5ffe message="disposing instance" directory=/Users/sahil/work/pa/experiments/00-writer-probe
