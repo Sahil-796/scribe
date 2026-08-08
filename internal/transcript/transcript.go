@@ -18,8 +18,14 @@
 //     tool_result message's content list holds only a "tool_result" block,
 //     never a "text" block. This package extracts only "text" blocks, so
 //     tool-result turns are dropped for free — no special-casing needed.
-//   - Subagent (sub-task) turns carry "isSidechain": true (trap #2) and are
-//     dropped outright, on both user and assistant lines.
+//   - The "isSidechain" field is real, but a full survey of 317 real
+//     transcripts (docs/findings/09-sidechain.md) found it "true" on zero
+//     lines in any top-level session file — subagent turns are instead
+//     written to separate "<session>/subagents/*.jsonl" files, which Read
+//     never opens, since transcriptPath only ever names the main file.
+//     That file separation is what actually keeps subagent chatter out of
+//     the docs. The "isSidechain" check below is kept anyway as cheap
+//     insurance in case a future format inlines sidechain turns again.
 //   - message.content is either a plain string (the common case for real
 //     user prompts) or a list of typed blocks: "text", "thinking",
 //     "tool_use", "tool_result", "image". Only "text" blocks (and plain
@@ -214,8 +220,9 @@ func parseLine(line []byte) (entry scribe.Entry, ok bool, err error) {
 		return scribe.Entry{}, false, fmt.Errorf("unrecognised line type %q", raw.Type)
 	}
 
-	// Trap #2: subagent sidechain turns are not part of the main
-	// conversation.
+	// Never observed true in a real top-level transcript (see package doc
+	// and docs/findings/09-sidechain.md) — subagent turns live in separate
+	// files this package never reads. Kept as cheap insurance regardless.
 	if raw.IsSidechain {
 		return scribe.Entry{}, false, nil
 	}
