@@ -35,15 +35,23 @@ func (w *opencodeWriter) Run(prompt string) (string, error) {
 
 // opencodeArgv builds the argv for one unattended opencode run.
 //
-// NOTE TO WHOEVER EDITS THIS NEXT (likely soon): unit 0B is, in parallel
-// with this unit, empirically probing opencode's actual flags for
-// non-interactive/headless mode and auto-approving tool use — phase 00's
-// "confirm the writer command completes unattended with no terminal
-// attached" unknown. The flags below are a best-effort placeholder, not a
-// verified answer. All opencode-specific argv shape is deliberately
-// contained in this one function so that once 0B's probing lands, fixing
-// it up is a one-function edit — nothing in exec.go, writer.go or any
-// caller needs to change.
+// Verified against `opencode run --help` (1.18.15) and
+// docs/findings/00-writer.md's empirical probing, both confirmed again on
+// this machine (docs/findings/07-live-run.md, bug 1): there is no --print
+// flag at all, and the real auto-approve flag is --auto, not
+// --auto-approve. Without --auto, opencode run doesn't hang or error — it
+// silently auto-rejects every edit the model attempts and still exits 0
+// with normal-looking output, which is worse than a hang because nothing
+// looks wrong until you notice the docs never changed (see the fail-open
+// guard in internal/worker). --format is deliberately left unset: the
+// default ("default") format's stdout is exactly the model's final text
+// with no TUI/ANSI noise when there's no TTY attached, which is what
+// internal/worker.parseEdits expects — --format json instead emits one
+// JSON event per line (step_start/text/step_finish/...), which parseEdits
+// (a single json.Unmarshal over all of stdout) cannot parse as-is. All
+// opencode-specific argv shape is deliberately contained in this one
+// function so a future correction is a one-function edit — nothing in
+// exec.go, writer.go or any caller needs to change.
 //
 // prompt is passed as the final positional argument rather than over
 // stdin, since stdin is reserved for the /dev/null redirect that keeps
@@ -57,10 +65,10 @@ func opencodeArgv(model, prompt string) []string {
 	if model != "" {
 		args = append(args, "--model", model)
 	}
-	// Best guess at opencode's non-interactive/auto-approve flag — opencode's
-	// TUI normally prompts for tool-use approval, which would hang forever
-	// with no TTY to answer it. Confirm and correct once 0B reports back.
-	args = append(args, "--print", "--auto-approve")
+	// opencode's real non-interactive auto-approve flag (docs/findings/00-writer.md,
+	// docs/findings/07-live-run.md bug 1). Required — without it every tool
+	// call gets auto-rejected and the run still exits 0.
+	args = append(args, "--auto")
 	args = append(args, prompt)
 	return args
 }

@@ -45,9 +45,16 @@ var ErrNotInteractive = errors.New("wizard: no interactive terminal attached")
 // other on a real transcript and found longcat-2.0-free the best of the
 // three tested — that is the model that belongs in this default, not the
 // example from the plan.
+//
+// DefaultModel carries the "opencode/" provider prefix because opencode's
+// -m/--model flag requires the "provider/model" form (`opencode run --help`:
+// "model to use in the format of provider/model") — a bare model name gets
+// an opaque UnknownError from opencode with no hint it's a naming problem
+// (docs/findings/07-live-run.md, bug 2). Verified against `opencode models`
+// on this machine, which lists this model as exactly "opencode/longcat-2.0-free".
 const (
 	DefaultAgent = "opencode"
-	DefaultModel = "longcat-2.0-free"
+	DefaultModel = "opencode/longcat-2.0-free"
 )
 
 // Answers is what the user chose.
