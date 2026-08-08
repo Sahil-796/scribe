@@ -156,7 +156,7 @@ func Ask(o Options) (Answers, error) {
 				Value(&agent),
 			huh.NewInput().
 				Title("Model").
-				Description("Passed through to the connector, e.g. \"opencode/"+DefaultModel+"\".").
+				Description("Passed through to the connector, e.g. \""+DefaultModel+"\".").
 				Value(&model).
 				Validate(huh.ValidateNotEmpty()),
 			huh.NewInput().
