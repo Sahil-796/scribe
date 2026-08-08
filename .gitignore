@@ -10,3 +10,6 @@ docs/scribe/
 
 # OS / editor
 .DS_Store
+
+# phase 00: never commit rendered transcripts
+experiments/00-model-bakeoff/cleaned_transcript*.md

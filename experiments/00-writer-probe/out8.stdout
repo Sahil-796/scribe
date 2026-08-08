@@ -1,0 +1,2 @@
+{"type":"error","timestamp":1786200293321,"sessionID":"ses_01e2a8676ffepB2Mjjgb45L2dQ","error":{"name":"UnknownError","data":{"message":"Unexpected server error. Check server logs for details.","ref":"err_e05acc28"}}}
+EXITCODE=1

@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/sahil/work/pa/experiments/00-hook-probe/probe.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
