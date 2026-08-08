@@ -142,12 +142,15 @@ plugin config. Tests here can pass for the wrong reason. Phase 00 worked around 
 with a forced local `ask` override; anything testing the approval path must do the
 same or it proves nothing.
 
-### 14. `scribe init` has never been run against a real repo with a real writer
+### 14. `scribe init` — run for real once, on a scratch repo
 
-Same shape as item 7, one phase over. `internal/seed`, `internal/replay`,
-`internal/install`, `internal/wizard`, and `cmd/scribe/init_test.go` all test against
-a fake `scribe.Writer` and `t.TempDir()`. Nobody has watched `init` produce a real
-PROJECT.md from a real README or real CHANGELOG entries from a real transcript.
+**Mostly closed.** `scribe init --apply` was run against a throwaway git repo with a
+real `opencode` writer during the item-7 live run. It installed the Stop hook, wrote
+the config, and produced docs the write-up judged genuinely good rather than filler.
+
+Still unproven: `init` against a repo with substantial existing history (the replay
+pass at real scale), and against a repo whose README and manifests are messier than a
+scratch fixture's. The seed pass has only ever seen a small, tidy repo.
 
 ### 15. The wizard's interactive path is entirely untested
 
