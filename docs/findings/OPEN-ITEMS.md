@@ -1,4 +1,4 @@
-# Open items — as of end of phases 00 and 01
+# Open items — as of end of phase 02
 
 Everything that is broken, unproven, or waiting on a decision. Nothing here is
 covered by a passing test, which is precisely why it's written down.
@@ -6,15 +6,12 @@ covered by a passing test, which is precisely why it's written down.
 Kept current as phases land. Delete lines when they're genuinely done, not when
 they're merely worked on.
 
+**Resolved:** the name. User has locked it to `scribe`. Phase 02 built `docs/scribe/`
+and `.scribe/` on that name; no longer blocking.
+
 ---
 
 ## Needs you — decisions nobody else can make
-
-### 1. The name — blocks phase 02
-
-`PLAN.md` says settle it before 02, and 02 is the phase that creates `docs/scribe/`
-in every onboarded repo. Renaming later means moving files in every repo that ever
-ran `init`. Currently `scribe` throughout, by default rather than by decision.
 
 ### 2. Default writing model — plan change awaiting sign-off
 
@@ -114,6 +111,53 @@ This machine's opencode has permissions opened globally via an `oh-my-openagent`
 plugin config. Tests here can pass for the wrong reason. Phase 00 worked around it
 with a forced local `ask` override; anything testing the approval path must do the
 same or it proves nothing.
+
+### 14. `scribe init` has never been run against a real repo with a real writer
+
+Same shape as item 7, one phase over. `internal/seed`, `internal/replay`,
+`internal/install`, `internal/wizard`, and `cmd/scribe/init_test.go` all test against
+a fake `scribe.Writer` and `t.TempDir()`. Nobody has watched `init` produce a real
+PROJECT.md from a real README or real CHANGELOG entries from a real transcript.
+
+### 15. The wizard's interactive path is entirely untested
+
+No pty in this environment. Unverified: actual huh form rendering and field
+navigation, validation messages, the `huh.ErrUserAborted` (Ctrl+C/Esc) branch in
+`Ask`/`Review`, the interactive redraw branch of `Progress`, and `Ask`/`Review`
+returning the operator's actual chosen values on the happy path. Only the
+not-interactive short-circuits are covered.
+
+### 16. Replay resumability is unverified at the `init` integration level
+
+`internal/replay`'s own tests cover chunk-by-chunk resume directly.
+`cmd/scribe/init_test.go` doesn't exercise it — temp repos in tests have no matching
+`~/.claude/projects/` sessions on disk, so an interrupted-then-resumed multi-chunk
+replay has never run through `scribe init` end to end.
+
+### 17. The docs-dir wizard question is decorative
+
+`install.Config.DocsDir` is asked for, stored, and displayed, but
+`internal/docs.Store` hardcodes `scribe.DocsDir` regardless. Matches locked Decision 9
+("fixed name, nothing to detect"), so may be intentional — but as written the wizard
+asks a question whose answer does nothing. Needs a call: drop the question, or wire it
+through.
+
+### 18. `init`'s empty-replay check is stringly-typed
+
+It detects "chunks processed but nothing emitted" by matching a `" (already done)"`
+suffix on `replay`'s human-readable progress labels. Works today, but coupled to a
+display string rather than a typed signal on `replay.Options`.
+
+### 19. Onboarded repos get no `.gitignore` entries from `init`
+
+This repo's own `.gitignore` covers `.scribe/` and `docs/scribe/`, but `scribe init`
+doesn't add equivalent entries to the repo it onboards. Nobody decided what `init`
+should do here — leave it, warn, or write the entries.
+
+### 20. `install` re-encodes `settings.json` through `encoding/json`, which alphabetises top-level keys
+
+All keys and values survive; original key order does not. Byte-exact preservation
+would need a JSON AST library, which isn't a dependency.
 
 ---
 
