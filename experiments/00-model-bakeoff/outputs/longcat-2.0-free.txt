@@ -1,0 +1,54 @@
+
+> build · longcat-2.0-free
+
+## CHANGELOG.md
+
+### 2026-07-31
+
+**Timeline paging fix** — `trend-tab.tsx` requested `limit=200` from `/api/companies/:trackedId/timeline`, which validates max 100 and returned 422. Replaced with cursor-based paging: pulls pages of 100 newest-first, stops when the oldest event falls before the chart window start, when there's no `nextCursor`, or after 5 pages (500 events) as a safety bound.
+
+**Crawler skip list** — Added `/alternatives/`, `/alternative-to/`, `/compare/`, `/vs/` to `defaultSkipPaths` in `crawler.go`. Drops per-competitor comparison farm pages while still crawling the hub page. Frees ~12 pages of the 50-page budget on affected sites.
+
+**Homepage-section pricing** — `findPricingPages` now falls back to the landing page when no pricing-typed or `/pricing`-path page exists, gated on a pricing heading plus either visible prices or ≥2 tier-like headings. Server's LLM fallback now uses the same candidate set. `truncate()` now picks the 8000-char window covering the densest run of price tokens (with 1000-char lead-in) instead of the first 8000 chars.
+
+**LLM pricing arithmetic repair** — Added `repairArithmeticLiterals` so the parser neutralizes inline math like `12 * 12 * 0.75` → `108` before `JSON.parse` ever sees it. Also added a prompt instruction to reduce how often the model does this (but the parser fix is the safety net).
+
+**Remove button fix** — `company-actions.tsx` overflow menu items now use `onClick` instead of `onSelect` (Base UI dropdown only fires `onClick`).
+
+**Tab loading — three fixes:**
+- `tab-nav.tsx` reads active tab from `useSearchParams()` (instant highlight) instead of a server-passed prop that only updated after a full round-trip.
+- `page.tsx` wraps tab content in a `<Suspense>` keyed on `tab:date` with a new `tab-content-skeleton.tsx` fallback — header and nav now stay put while only the content area shimmers.
+- `middleware.ts` skips the blocking `/api/me/limits` fetch on client-side navigations (detected via Next's `next-url` request header). Dropped tab-click latency from ~1.4s to ~2ms. Full page loads still hit the limits check.
+
+**Recrawl script** — Added `apps/server/scripts/recrawl.ts` (`bun run scripts/recrawl.ts <url>`) that enqueues the same `crawl.run` job the "add company" flow uses. No "recrawl now" UI/route exists yet; crawls otherwise only fire on first-add and the 15-min cron sweep.
+
+**Companies table cleanup** — Removed 11 companies: 6 fake `.scout-demo.test` rows, orphaned `stand.store`, and `linear.app`/`stripe.com`/`vercel.com`/`notion.so` (only tracked by the `sahil@test.dev` seed account). `companies` now has 6 real tracked companies: `rezi.ai`, `groq.com`, `figma.com`, `browserstack.com`, `appthetics.com`, `stan.store`.
+
+**Bug filed** — [#2](https://github.com/Sahil-796/scout/issues/2): "Crawler misses JS-rendered (SPA) sites — no content extracted." stan.store returns empty content because the crawler uses plain `net/http` with no JS execution; proposed headless-rendering fallback for near-empty extractions.
+
+---
+
+## JOURNAL.md
+
+### 2026-07-31
+
+**What we were actually doing:** This session was a grind through every failure mode of the crawl→normalize→diff pipeline, exposed by adding real (non-fixture) sites for the first time. Each site broke differently.
+
+**Timeline 422 was easy.** Straightforward over-cap limit. The cursor-paging fix was clean and also more correct than the old flat-200 call.
+
+**Appthetics.com ("no data") turned out to be three stacked problems**, not one. (1) The 50-page budget was spent entirely on sitemap URLs in sitemap order — `/alternatives/*` and blog posts ate it all, `/changelog` (not in sitemap) never got dequeued. (2) `/pricing` 308-redirects to `/` because pricing is a homepage section, not a page — so the normalizer's path-based candidate selection found nothing. (3) Even once we taught it to look at the homepage, `truncate()` took the first 8000 chars where the pricing section sits ~20k chars in behind testimonials; the model saw only marketing and answered `is_gated: true`. The densest-window picker was the unglamorous fix that actually mattered.
+
+**The crawler skip list was the user's suggestion** — "can't we skip alternatives?" — and it's the right call. A whole class of pages that carry no entity signal, gone.
+
+**Tab loading felt like one bug but was three compounding ones.** The active pill not moving, no skeleton, and a blocking middleware fetch. The middleware fix was the highest-leverage: ~1.4s→~2ms. The header-detection was fiddly — the commonly-documented `rsc` header and `_rsc` query param didn't reach middleware in this Next version; had to dump real request headers to find `next-url` was the actual signal.
+
+**The cal.com pricing fix went through two false starts.** First attempt: a prompt instruction telling the model "numbers only, compute the math yourself." Re-ran the real pipeline, failed again with the exact same error — LLM output is non-deterministic, a wording change can't guarantee compliance. Second attempt: made the parser itself tolerant with `repairArithmeticLiterals`. That held. Lesson: when the model can't be trusted to follow instructions, defend at the parse boundary.
+
+**Companies table cleanup was delicate** because `companies` is shared across tenants — deleting a row cascades to every user tracking it. Had to map actual foreign-key relationships before touching anything. Ended up retiring the seed account's tracking rows rather than the shared company data where possible.
+
+**The Wayback Machine backfill surprised the user** ("woah thats cool"). It also explains the "60% incorrect" messaging on rezi.ai — archive.org snapshots of JS-heavy sites are frequently incomplete, and the normalizer runs the same heuristics against bad input. The user also flagged a real inconsistency: on a fresh company, the live crawl marks everything as "added today" moments before backfill lays 2 years of history underneath — so the timeline shows "added pricing page" next to proof it existed a year ago. Proposed suppressing first-crawl "added" events entirely; not implemented.
+
+**Big architectural discussion at the end.** Every normalizer hardcodes a DOM-shape assumption (messaging wants `<h1>`, pricing wants `h2`/`h3` tier headings, jobs wants Title Case heading-shaped titles), and only pricing has an LLM fallback. The user pushed back hard: "we cant go on to every website and optimise for them." Proposed LLM-first with schema-enforced output (`generateObject` + Zod) for all five kinds, with content-hash gating so stable sites cost $0 on most crawls. Honest caveat raised: LLM-first is non-deterministic and the product is *change detection*, so reworded output could produce phantom "Hero Rewrite" events. Not implemented — flagged as a real tradeoff needing a decision. Also noted the fetch layer needs two separate fixes: headless render for SPAs, and ATS provider API detection for jobs (Greenhouse/Lever/Ashby).
+
+**Things discussed but not built:** LLM-first normalize layer, ATS detection, first-crawl event suppression, headless SPA rendering.
+

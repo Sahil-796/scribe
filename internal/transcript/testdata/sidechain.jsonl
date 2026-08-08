@@ -1,0 +1,4 @@
+{"parentUuid":null,"isSidechain":false,"type":"user","timestamp":"2026-08-08T05:07:09.000Z","message":{"role":"user","content":"please investigate the failing test"}}
+{"parentUuid":"a","isSidechain":true,"type":"user","timestamp":"2026-08-08T05:07:10.000Z","message":{"role":"user","content":"find all references to Foo"}}
+{"parentUuid":"b","isSidechain":true,"type":"assistant","timestamp":"2026-08-08T05:07:11.000Z","message":{"model":"claude-sonnet-5","role":"assistant","content":[{"type":"text","text":"Found 3 references to Foo in bar.go"}]}}
+{"parentUuid":"c","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:12.000Z","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"The subagent found the issue: Foo is unused."}]}}

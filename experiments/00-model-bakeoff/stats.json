@@ -1,0 +1,25 @@
+{
+  "total_records": 1133,
+  "sidechain_filtered": 0,
+  "non_message_records": 140,
+  "tool_result_user_msgs": 360,
+  "command_invocations": 4,
+  "interruptions": 1,
+  "silent_assistant_turns": 529,
+  "real_user_turns": 24,
+  "real_assistant_turns": 75,
+  "raw_bytes": 5509375,
+  "record_type_counts": {
+    "custom-title": 12,
+    "ai-title": 11,
+    "mode": 11,
+    "queue-operation": 12,
+    "user": 389,
+    "attachment": 64,
+    "assistant": 604,
+    "system": 18,
+    "last-prompt": 12
+  },
+  "cleaned_bytes": 67581,
+  "compression_ratio": 81.52
+}
