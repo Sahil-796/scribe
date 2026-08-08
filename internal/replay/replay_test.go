@@ -260,6 +260,7 @@ func TestRun_EmitsAndChunks(t *testing.T) {
 
 	var got []emitted
 	var progressLabels []string
+	var progressStatuses []ChunkStatus
 
 	err := Run(Options{
 		RepoRoot:           tmp,
@@ -267,7 +268,8 @@ func TestRun_EmitsAndChunks(t *testing.T) {
 		Sessions:           []Session{{ID: "sess", Path: sessPath}},
 		MaxEntriesPerChunk: 2,
 		StatePath:          filepath.Join(tmp, ".scribe", "replay.json"),
-		Progress: func(done, total int, label string) {
+		Progress: func(status ChunkStatus, done, total int, label string) {
+			progressStatuses = append(progressStatuses, status)
 			progressLabels = append(progressLabels, fmt.Sprintf("%d/%d %s", done, total, label))
 		},
 		Emit: func(doc scribe.Doc, entry string) error {
@@ -291,6 +293,14 @@ func TestRun_EmitsAndChunks(t *testing.T) {
 	}
 	if len(progressLabels) != 3 {
 		t.Errorf("progress called %d times, want 3: %v", len(progressLabels), progressLabels)
+	}
+	// The status is the typed signal callers act on (OPEN-ITEMS item 18);
+	// a fresh run where every chunk was written must report exactly that,
+	// with no caller ever needing to read the label.
+	for i, st := range progressStatuses {
+		if st != ChunkWritten {
+			t.Errorf("chunk %d status = %v, want ChunkWritten", i, st)
+		}
 	}
 
 	// Each writer prompt must only ever see its own chunk's entries, never

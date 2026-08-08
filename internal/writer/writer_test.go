@@ -28,6 +28,49 @@ func stubScript(t *testing.T, body string) string {
 	return path
 }
 
+// TestOpencodeArgv_ExactFlags pins the exact argv opencodeArgv builds, so a
+// future edit can't silently reintroduce a guessed flag (--print,
+// --auto-approve) or drop the real one (--auto). Verified empirically
+// against `opencode run --help` (1.18.15) and docs/findings/00-writer.md /
+// docs/findings/07-live-run.md: --auto is required (its absence makes
+// opencode silently auto-reject every edit and still exit 0), --print does
+// not exist, and --format must stay unset since the default format's stdout
+// is what internal/worker.parseEdits expects (--format json would break it).
+func TestOpencodeArgv_ExactFlags(t *testing.T) {
+	got := opencodeArgv("opencode/longcat-2.0-free", "the prompt")
+	want := []string{"run", "--model", "opencode/longcat-2.0-free", "--auto", "the prompt"}
+	if len(got) != len(want) {
+		t.Fatalf("opencodeArgv() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("opencodeArgv() = %#v, want %#v", got, want)
+		}
+	}
+	for _, forbidden := range []string{"--print", "--auto-approve", "--format"} {
+		for _, a := range got {
+			if a == forbidden {
+				t.Fatalf("opencodeArgv() contains %q, which is not a real opencode flag (or breaks parseEdits): %#v", forbidden, got)
+			}
+		}
+	}
+}
+
+// TestOpencodeArgv_NoModel checks the model flag is omitted, not passed
+// empty, when no model is configured.
+func TestOpencodeArgv_NoModel(t *testing.T) {
+	got := opencodeArgv("", "prompt")
+	want := []string{"run", "--auto", "prompt"}
+	if len(got) != len(want) {
+		t.Fatalf("opencodeArgv() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("opencodeArgv() = %#v, want %#v", got, want)
+		}
+	}
+}
+
 func TestNewUnknownAgent(t *testing.T) {
 	_, err := New(Config{Agent: "not-a-real-agent"})
 	if err == nil {

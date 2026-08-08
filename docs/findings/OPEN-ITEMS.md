@@ -1,4 +1,4 @@
-# Open items — as of end of phase 02
+# Open items — as of end of phase 02, plus the phase 00/01 fixes
 
 Everything that is broken, unproven, or waiting on a decision. Nothing here is
 covered by a passing test, which is precisely why it's written down.
@@ -59,51 +59,92 @@ verified as a writer connector and its connector should not be written.
 
 ---
 
+## Resolved this pass — kept for the record, delete once read
+
+Items 7, 9, 11, 12, 16, 17, 18, 19, 21 and 23 are done. They are written up below
+rather than deleted so the next reader can see what changed and why.
+
 ## Unproven — claimed nowhere, but easy to assume
 
-### 7. The loop has never run live. Phase 01's done-when is NOT met
+### 7. RESOLVED — the loop runs unattended and the docs land
 
-Nothing has run `opencode` end to end and produced real docs in a real repo. Every
-phase 01 test uses fakes or stub executables. The plan's bar — *"work for an hour,
-touch nothing, and the four docs are current afterwards"* — has not been demonstrated.
+The loop was run end to end against real `opencode` in a throwaway repo:
+`scribe init --apply`, a real Stop hook, `scribe run`, and CHANGELOG/JOURNAL genuinely
+updated with accurate content. Full write-up in `07-live-run.md`.
 
-**This is the single most important thing to do next.** Everything else is built on
-the assumption that it works.
+Three bugs were found and fixed doing it — all of them meant the loop could not have
+worked at all before:
 
-### 8. No fail-open guard — the highest-value small fix on the board
+- `opencodeArgv` passed `--print --auto-approve`, neither of which is a real flag.
+  The correct argv is `run [--model M] --auto <prompt>`, verified against
+  `opencode run --help` (1.18.15).
+- The default model lacked its provider prefix: `opencode/longcat-2.0-free`, not
+  `longcat-2.0-free`.
+- **`scribe run` was still `notImplemented` and nothing anywhere called
+  `internal/worker`.** Phase 01 shipped a complete, tested worker with no caller.
+  It is now implemented, and `scribe hook` spawns a detached `scribe run` after
+  enqueueing, so the loop closes without human intervention.
 
-Phase 00 found `opencode run` without `--auto` **silently auto-rejects and exits 0**
-with normal-looking JSON. The phase 01 worker currently treats exit 0 as success.
+**Demonstrated.** Four live runs against real `opencode` in throwaway repos: manual
+`scribe run`, a trivial session, and twice fully unattended — hook fires, spawns the
+detached worker, docs update, offset saves, nothing touched. Output quality is good:
+one run caught a regression the transcript only implied, flagged a new dependency, and
+recorded an open question.
 
-Until this is fixed, scribe can report success on every run while writing nothing at
-all, indefinitely, with no signal. Fix: compare doc state before and after; treat
-"exit 0, nothing changed" as a failure.
+The remaining honest caveat is scale, not mechanism: this is single sessions in scratch
+repos, not an hour of real work in a repo with history. Item 24 is the quality problem
+that showed up while proving it.
 
-### 9. `isSidechain` filtering is unverified against reality
+### 8. Fail-open guard — landed, but never seen firing on a real auto-reject
 
-`PLAN.md` states this trap as confirmed. **Zero** such lines were found across 68 real
-transcripts. The filter is implemented and passes synthetic fixtures, but no real data
-has ever exercised it. Either the trap is rarer than believed, or it's recorded
-differently now. Settle before phase 03 relies on it.
+**Fixed.** `internal/worker` now re-reads the docs after applying edits and treats
+"writer exited 0, nothing changed" as a failure; the offset does not advance. Pinned
+by a failing test first, covering both zero parsed edits and edits identical to
+existing content. A trigger that yields no new transcript entries is still a
+legitimate no-op, not an error.
 
-### 10. Stop-hook behaviour during subagents is unconfirmed
+Unproven: the guard has only ever fired against a fake writer. Across four live runs
+it never fired once — no false positives, but also no observed real auto-reject, so the
+shape of a genuinely auto-rejected run's output is still an assumption from phase 00's
+notes.
 
-Only one Stop event fired for a `Task` exchange, but the run couldn't be confirmed to
-have delegated at all. Related to item 9 — both concern subagent turns, and both are
-guesses right now.
+### 9. `isSidechain` — settled
 
-### 11. Hook failures may go nowhere
+**Resolved.** Surveyed all 317 real transcript files on this machine. In the 120
+top-level session transcripts (38,279 lines) `isSidechain: true` appears **zero**
+times. Every line of the 197 files in per-session `subagents/` subdirectories has it
+`true`. Subagent turns are not interleaved into the main transcript at all — they are
+written to separate files, and the Stop hook's `transcript_path` only ever names the
+main one, so `Read()` never opens them.
 
-A Stop hook exiting non-zero doesn't visibly break the session. Nobody checked whether
-that failure is logged anywhere. If it isn't, `scribe doctor` has nothing to inspect
-and silent hook death means docs stop updating with no signal — the same failure shape
-as item 8, one layer up.
+The plan was right about the field and wrong about the mechanism. What protects scribe
+is file separation, not the filter. The filter is kept as cheap insurance and its
+comments now say so. Evidence in `09-sidechain.md`.
 
-### 12. Writer timeout is unsized
+### 10. Stop-hook behaviour during subagents — better evidence, not conclusive
 
-Cold starts measured 6–26 s with high variance — too noisy to pick a production
-timeout from. The current value is a guess. Needs real measurement under load before
-phase 04 ships config.
+One real burst in this repo's own history showed 7 back-to-back subagent delegations
+followed by exactly one `stop_hook_summary`. That supports "one Stop per turn
+regardless of delegation count" but is a single observation, not a proof.
+
+### 11. Hook failures — Claude Code does record them; scribe now does too
+
+**Closed.** Established empirically with a live probe (a Stop hook that exits 1, run
+under a real `claude -p` session): Claude Code writes a `hook_non_blocking_error`
+attachment into that session's own transcript, carrying exit code, stderr, command and
+duration. So the failure was never going nowhere — but it was per-session, unaggregated,
+and somewhere `scribe doctor` had no reason to look.
+
+`scribe hook` now appends failures to a bounded (50-line) `.scribe/hook-failures.log`,
+and `scribe doctor` surfaces recent entries. Logging can never change the hook's exit
+code. Known limit: the log's read-modify-write is not process-locked, so two
+simultaneous failures in one repo could drop a line.
+
+### 12. Writer timeout — measured, current value supported
+
+**Closed at the current value.** Five real `opencode` runs measured 7.8–15.6 s, mean
+~10.2 s; combined with phase 00's 6–26 s, the existing 3-minute timeout has ample
+headroom. Not tightened — the variance doesn't justify it.
 
 ### 13. opencode permissions are pre-opened on this machine
 
@@ -112,12 +153,15 @@ plugin config. Tests here can pass for the wrong reason. Phase 00 worked around 
 with a forced local `ask` override; anything testing the approval path must do the
 same or it proves nothing.
 
-### 14. `scribe init` has never been run against a real repo with a real writer
+### 14. `scribe init` — run for real once, on a scratch repo
 
-Same shape as item 7, one phase over. `internal/seed`, `internal/replay`,
-`internal/install`, `internal/wizard`, and `cmd/scribe/init_test.go` all test against
-a fake `scribe.Writer` and `t.TempDir()`. Nobody has watched `init` produce a real
-PROJECT.md from a real README or real CHANGELOG entries from a real transcript.
+**Mostly closed.** `scribe init --apply` was run against a throwaway git repo with a
+real `opencode` writer during the item-7 live run. It installed the Stop hook, wrote
+the config, and produced docs the write-up judged genuinely good rather than filler.
+
+Still unproven: `init` against a repo with substantial existing history (the replay
+pass at real scale), and against a repo whose README and manifests are messier than a
+scratch fixture's. The seed pass has only ever seen a small, tidy repo.
 
 ### 15. The wizard's interactive path is entirely untested
 
@@ -127,47 +171,99 @@ navigation, validation messages, the `huh.ErrUserAborted` (Ctrl+C/Esc) branch in
 returning the operator's actual chosen values on the happy path. Only the
 not-interactive short-circuits are covered.
 
-### 16. Replay resumability is unverified at the `init` integration level
+### 16. RESOLVED — replay resume is now covered through `init`
 
-`internal/replay`'s own tests cover chunk-by-chunk resume directly.
-`cmd/scribe/init_test.go` doesn't exercise it — temp repos in tests have no matching
-`~/.claude/projects/` sessions on disk, so an interrupted-then-resumed multi-chunk
-replay has never run through `scribe init` end to end.
+`TestInit_ReplayResumesAfterAFailedChunk` plants a synthetic transcript under a
+redirected `HOME` (never the real history) and drives three runs: chunks that failed
+are retried, chunks that succeeded are skipped. It asserts the first run actually
+produced chunks, so it can't pass vacuously.
 
-### 17. The docs-dir wizard question is decorative
+### 17. RESOLVED — the question is gone
 
-`install.Config.DocsDir` is asked for, stored, and displayed, but
-`internal/docs.Store` hardcodes `scribe.DocsDir` regardless. Matches locked Decision 9
-("fixed name, nothing to detect"), so may be intentional — but as written the wizard
-asks a question whose answer does nothing. Needs a call: drop the question, or wire it
-through.
+Decision 9 fixes the path, so the honest fix was to stop asking. The wizard's "Docs
+directory" field and `init`'s `--docs-dir` flag are both removed; the setup note states
+the path instead. `install.Config.DocsDir` still records it, so wiring it through later
+remains possible if decision 9 is ever reopened.
 
-### 18. `init`'s empty-replay check is stringly-typed
+### 18. RESOLVED — typed signal replaces the string match
 
-It detects "chunks processed but nothing emitted" by matching a `" (already done)"`
-suffix on `replay`'s human-readable progress labels. Works today, but coupled to a
-display string rather than a typed signal on `replay.Options`.
+`replay.ChunkStatus` (`ChunkWritten` / `ChunkSkipped` / `ChunkFailed`) is now passed to
+`Options.Progress`, and `init` switches on it. No caller reads the display label to
+make a decision any more.
 
-### 19. Onboarded repos get no `.gitignore` entries from `init`
+### 19. RESOLVED — `init` writes the entries
 
-This repo's own `.gitignore` covers `.scribe/` and `docs/scribe/`, but `scribe init`
-doesn't add equivalent entries to the repo it onboards. Nobody decided what `init`
-should do here — leave it, warn, or write the entries.
+`scribe init --apply` appends `.scribe/` and `docs/scribe/` to the onboarded repo's
+`.gitignore`, preserving what's already there and never duplicating an entry. Verified
+live: after onboarding, `git status` shows none of scribe's own files.
+
+**Note this pre-empts item 3.** Ignoring `.scribe/` is uncontroversial local state, but
+ignoring `docs/scribe/` follows PLAN.md's "gitignore for the first week regardless"
+rather than a decision you've made. `gitignoreEntries` in `cmd/scribe/init.go` is the
+single place to change if you land on committing them.
 
 ### 20. `install` re-encodes `settings.json` through `encoding/json`, which alphabetises top-level keys
 
 All keys and values survive; original key order does not. Byte-exact preservation
 would need a JSON AST library, which isn't a dependency.
 
+### 21. RESOLVED — not reproducible
+
+Four live runs later, this never recurred: manual `scribe run`, a trivial session, and
+two fully unattended hook-driven runs all updated the docs and saved offsets. The guard
+did not fire once.
+
+The original observation stands unexplained rather than disproven — it was seen once,
+during a run driven by a real `claude -p` session, and the specific stdout was not
+captured. If it returns, capture the writer's raw stdout first; that's the one piece of
+evidence that was missing.
+
+### 22. Concurrency under real triggers is still unproven
+
+Offset advancement across sessions, multi-trigger coalescing, and the per-repo lock
+under genuine contention have only been exercised by `internal/worker`'s fakes. Live,
+only a single uncontended lock acquire/release has been observed.
+
+### 23. RESOLVED — spawn failures are logged
+
+`internal/hook.LogFailure` is now exported and `cmd/scribe/hook.go` records a failed
+spawn to the same bounded log `scribe doctor` reads. The hook still exits 0 — the
+trigger is safely queued — but the failure is no longer invisible.
+
+### 24. The writer documents trivial exchanges — phase 03's problem, now with evidence
+
+A live run on a throwaway "what go version is this repo on?" exchange produced its own
+JOURNAL entry. Nothing was wrong mechanically; the model simply wrote up something not
+worth writing up.
+
+This is exactly what PLAN.md's phase 03 exists to fix ("PROJECT and DECISIONS gated
+behind did anything product-level actually happen", "teach the journal what's worth
+capturing"). Worth keeping the reproduction: it's a two-line transcript and a 30-second
+run, which makes it a cheap test case for the gating work.
+
+### 25. `init` reported docs it never wrote — fixed, noted for the pattern
+
+`init` printed `Wrote docs/scribe/{PROJECT.md,DECISIONS.md,CHANGELOG.md,JOURNAL.md}`
+unconditionally, while a repo with no past sessions only ever gets two. Now it lists
+what actually landed and says why the other two are empty. Flagged because it's the
+same family as item 8: reporting success for work that didn't happen.
+
 ---
 
 ## Process notes
 
-- **Neither PR is merged.** [#1](https://github.com/Sahil-796/scribe/pull/1) is phase
-  00, [#2](https://github.com/Sahil-796/scribe/pull/2) is phase 01.
-- **They were opened as siblings, not a stack** — no file overlap, no code dependency.
-  This branch has since merged phase 00 in, so continuing from `phase-01-loop` gives
-  you everything. That does mean PR #2's diff now includes phase 00's files.
+- **No PR is merged.** [#1](https://github.com/Sahil-796/scribe/pull/1) is phase 00,
+  [#2](https://github.com/Sahil-796/scribe/pull/2) is phase 01. Phase 02 and these
+  fixes are stacked on top as two further PRs.
+- **#1 and #2 were opened as siblings, not a stack** — no file overlap, no code
+  dependency. `phase-01-loop` has since merged phase 00 in, so PR #2's diff includes
+  phase 00's files.
 - Phase 01 was built before phase 00's gate verdict was in, at the user's request.
   The gate passed, so this cost nothing — but the writer connector was being built on
   an unvalidated assumption for the duration.
+- Phase 02 and the fixes above were built by a fleet of Sonnet subagents with hard
+  file-ownership allowlists and a scope-diff gate. Zero out-of-scope files, zero
+  contested files. It was also expensive — twelve agents, each reading the codebase
+  cold, and the agents driving real `opencode` and `claude -p` sessions dominated
+  both wall-clock and token cost. Fan out on breadth; don't fan out on work that is
+  mostly waiting on a slow external process.

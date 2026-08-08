@@ -45,9 +45,16 @@ var ErrNotInteractive = errors.New("wizard: no interactive terminal attached")
 // other on a real transcript and found longcat-2.0-free the best of the
 // three tested — that is the model that belongs in this default, not the
 // example from the plan.
+//
+// DefaultModel carries the "opencode/" provider prefix because opencode's
+// -m/--model flag requires the "provider/model" form (`opencode run --help`:
+// "model to use in the format of provider/model") — a bare model name gets
+// an opaque UnknownError from opencode with no hint it's a naming problem
+// (docs/findings/07-live-run.md, bug 2). Verified against `opencode models`
+// on this machine, which lists this model as exactly "opencode/longcat-2.0-free".
 const (
 	DefaultAgent = "opencode"
-	DefaultModel = "longcat-2.0-free"
+	DefaultModel = "opencode/longcat-2.0-free"
 )
 
 // Answers is what the user chose.
@@ -139,7 +146,7 @@ func Ask(o Options) (Answers, error) {
 		huh.NewGroup(
 			huh.NewNote().
 				Title("scribe init").
-				Description(fmt.Sprintf("Setting up %s for %s.", docsDir, o.RepoRoot)),
+				Description(fmt.Sprintf("Setting up %s in %s.\nThe four docs stay current after every reply.", docsDir, o.RepoRoot)),
 		),
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -149,14 +156,14 @@ func Ask(o Options) (Answers, error) {
 				Value(&agent),
 			huh.NewInput().
 				Title("Model").
-				Description("Passed through to the connector, e.g. \"opencode/"+DefaultModel+"\".").
+				Description("Passed through to the connector, e.g. \""+DefaultModel+"\".").
 				Value(&model).
 				Validate(huh.ValidateNotEmpty()),
-			huh.NewInput().
-				Title("Docs directory").
-				Description("Where the four docs live, relative to the repo root.").
-				Value(&docsDir).
-				Validate(huh.ValidateNotEmpty()),
+			// No "docs directory" field: the path is fixed by decision 9
+			// (scribe.DocsDir — fixed name, nothing to detect, no collision
+			// with docs you already keep), and internal/docs hardcodes it
+			// regardless of what's configured. Asking would imply a choice
+			// that doesn't exist. The note above states the path instead.
 		),
 		huh.NewGroup(
 			huh.NewConfirm().

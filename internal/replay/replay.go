@@ -119,6 +119,25 @@ func mangle(absRepoRoot string) string {
 	return strings.NewReplacer("/", "-", ".", "-").Replace(absRepoRoot)
 }
 
+// ChunkStatus says what happened to one chunk, so a caller can tell
+// "we did work" from "we skipped work already done" without parsing the
+// human-readable progress label (OPEN-ITEMS item 18: cmd/scribe/init.go
+// used to match on a " (already done)" suffix, which coupled a control
+// decision to display text).
+type ChunkStatus int
+
+const (
+	// ChunkWritten: the writer ran, its output parsed, and every entry was
+	// emitted. This chunk contributed content.
+	ChunkWritten ChunkStatus = iota
+	// ChunkSkipped: resume state says this chunk was already completed by
+	// an earlier run, so no writer call was made.
+	ChunkSkipped
+	// ChunkFailed: the writer call, the parse, or an emit failed. The run
+	// continues, and Run's returned error names the chunk.
+	ChunkFailed
+)
+
 // Options configures a replay run.
 type Options struct {
 	RepoRoot string
@@ -128,7 +147,7 @@ type Options struct {
 	MaxEntriesPerChunk int    // zero means a sane default
 	StatePath          string // resume state; zero means <repoRoot>/.scribe/replay.json
 
-	Progress func(done, total int, label string)
+	Progress func(status ChunkStatus, done, total int, label string)
 
 	// Emit receives one produced history entry. The caller decides where it
 	// lands — real docs or a dry-run preview. Replay itself writes no docs.
@@ -213,14 +232,14 @@ func Run(o Options) error {
 
 		if st.Completed[key] {
 			done++
-			reportProgress(o.Progress, done, total, label+" (already done)")
+			reportProgress(o.Progress, ChunkSkipped, done, total, label+" (already done)")
 			continue
 		}
 
 		if err := runChunk(o, pc.entries); err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", key, err))
 			done++
-			reportProgress(o.Progress, done, total, label+" (failed)")
+			reportProgress(o.Progress, ChunkFailed, done, total, label+" (failed)")
 			continue
 		}
 
@@ -230,7 +249,7 @@ func Run(o Options) error {
 		}
 
 		done++
-		reportProgress(o.Progress, done, total, label)
+		reportProgress(o.Progress, ChunkWritten, done, total, label)
 	}
 
 	if len(failures) > 0 {
@@ -270,11 +289,11 @@ func runChunk(o Options, entries []scribe.Entry) error {
 	return nil
 }
 
-func reportProgress(fn func(done, total int, label string), done, total int, label string) {
+func reportProgress(fn func(status ChunkStatus, done, total int, label string), status ChunkStatus, done, total int, label string) {
 	if fn == nil {
 		return
 	}
-	fn(done, total, label)
+	fn(status, done, total, label)
 }
 
 // chunkEntries splits entries into groups of at most max, preserving order.

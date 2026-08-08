@@ -428,6 +428,99 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	}
 }
 
+// TestRunFailsWhenWriterMakesNoChange pins down open item 8
+// (docs/findings/OPEN-ITEMS.md, docs/findings/00-writer.md): `opencode run`
+// without `--auto` auto-rejects every edit and still exits 0 with
+// normal-looking JSON. A writer that returns success but changes nothing
+// must be treated as a failure, not silently accepted, or scribe can report
+// success forever while writing nothing at all.
+//
+// Two shapes of "nothing changed" are covered: the writer's output parses
+// to zero edits, and the writer's output parses to edits but the content is
+// byte-identical to what's already on disk (e.g. it echoed the doc back
+// unchanged).
+func TestRunFailsWhenWriterMakesNoChange(t *testing.T) {
+	tests := []struct {
+		name         string
+		writerOutput string
+		preexisting  map[scribe.Doc]string // seeded into store.state before Run
+	}{
+		{
+			name:         "writer output parses to zero edits",
+			writerOutput: `{}`,
+		},
+		{
+			name:         "writer output parses to edits identical to current content",
+			writerOutput: `{"PROJECT.md": "unchanged content"}`,
+			preexisting:  map[scribe.Doc]string{scribe.DocProject: "unchanged content"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+				{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+			}}
+			tr := newFakeTranscript()
+			tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+			store := newFakeDocStore()
+			for d, v := range tt.preexisting {
+				store.state[d] = v
+			}
+			w := &fakeWriter{outputs: []string{tt.writerOutput}}
+
+			deps := Deps{
+				Queue: q, Docs: store, Writer: w,
+				ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+			}
+
+			if err := Run(deps); err == nil {
+				t.Fatal("expected Run to fail when the writer changed nothing")
+			}
+
+			if got := tr.offsets["s1"]; got != 0 {
+				t.Fatalf("offset must not advance when nothing changed, got %d", got)
+			}
+			if len(tr.saveCalls) != 0 {
+				t.Fatalf("SaveOffset must not be called when nothing changed, got %d calls", len(tr.saveCalls))
+			}
+		})
+	}
+}
+
+// TestRunNoNewTranscriptEntriesIsNotAFailure is the counterpart to
+// TestRunFailsWhenWriterMakesNoChange: a trigger fires but the transcript
+// has no new bytes since the last offset. "Nothing changed" here is
+// legitimate (there was nothing to say), not the writer swallowing an
+// edit, so the writer must not even be called and Run must not error.
+func TestRunNoNewTranscriptEntriesIsNotAFailure(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	// No entries seeded for "/repo/t1", so Read returns (nil, offset, nil):
+	// the transcript hasn't grown since the last run.
+
+	store := newFakeDocStore()
+	w := &fakeWriter{outputs: []string{`{"CHANGELOG.md": "should not be called"}`}}
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if w.calls != 0 {
+		t.Fatal("writer must not run when there are no new transcript entries")
+	}
+	if len(tr.saveCalls) != 0 {
+		t.Fatalf("no offset save expected when there was nothing new, got %d calls", len(tr.saveCalls))
+	}
+}
+
 func TestBuildPromptIncludesDocsAndEntries(t *testing.T) {
 	current := map[scribe.Doc]string{
 		scribe.DocProject:   "proj content",

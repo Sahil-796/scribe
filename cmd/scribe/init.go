@@ -75,18 +75,19 @@ Dry run by default: everything it would write is staged under
 hook is installed. Pass --apply to make it real.
 
 With a terminal attached (and without --yes), a wizard asks for the writer
-agent, model, and docs directory up front, and — if --apply was passed —
-shows a review screen with the exact content before writing anything.
-Without a terminal (CI, scripts), it falls back to --agent/--model/--docs-dir
-flags and their defaults; --apply then requires --yes, since there is no
-way to show a review screen to nobody.`,
+agent and model up front, and — if --apply was passed — shows a review
+screen with the exact content before writing anything. Without a terminal
+(CI, scripts), it falls back to --agent/--model and their defaults; --apply
+then requires --yes, since there is no way to show a review screen to
+nobody.
+
+The docs path is fixed at docs/scribe (decision 9) and is not configurable.`,
 		Args: cobra.NoArgs,
 		RunE: runInit,
 	}
 
 	cmd.Flags().String("agent", "", "writer agent connector (default: "+wizard.DefaultAgent+")")
 	cmd.Flags().String("model", "", "model passed to the writer agent (default: "+wizard.DefaultModel+")")
-	cmd.Flags().String("docs-dir", "", "docs directory, relative to the repo root (default: "+scribe.DocsDir+")")
 	cmd.Flags().Bool("yes", false, "skip the interactive wizard and review screen; use flags/defaults")
 	cmd.Flags().Bool("apply", false, "write for real: docs, Stop hook, config. Default is a dry run")
 
@@ -99,7 +100,6 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	agentFlag, _ := cmd.Flags().GetString("agent")
 	modelFlag, _ := cmd.Flags().GetString("model")
-	docsDirFlag, _ := cmd.Flags().GetString("docs-dir")
 	yes, _ := cmd.Flags().GetBool("yes")
 	apply, _ := cmd.Flags().GetBool("apply")
 
@@ -139,9 +139,6 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		if modelFlag != "" {
 			wOpts.DefaultModel = modelFlag
 		}
-		if docsDirFlag != "" {
-			wOpts.DocsDir = docsDirFlag
-		}
 		answers, err = wizard.Ask(wOpts)
 		if err != nil {
 			return fmt.Errorf("scribe init: %w", err)
@@ -154,7 +151,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		answers = wizard.Answers{
 			Agent:   firstNonEmpty(agentFlag, wizard.DefaultAgent),
 			Model:   firstNonEmpty(modelFlag, wizard.DefaultModel),
-			DocsDir: firstNonEmpty(docsDirFlag, scribe.DocsDir),
+			DocsDir: scribe.DocsDir,
 			Proceed: true,
 		}
 	}
@@ -253,14 +250,16 @@ func computePreview(repoRoot string, w scribe.Writer, out, errOut io.Writer) (ma
 		RepoRoot:  repoRoot,
 		Writer:    w,
 		StatePath: previewStatePath(repoRoot),
-		Progress: func(done, total int, label string) {
+		Progress: func(status replay.ChunkStatus, done, total int, label string) {
 			if total == 0 {
 				return
 			}
 			if stepFn == nil {
 				stepFn, doneFn = wizard.Progress(total)
 			}
-			if !strings.Contains(label, "(already done)") {
+			// A skipped chunk was completed by an earlier run, so it says
+			// nothing about whether this run produced anything.
+			if status != replay.ChunkSkipped {
 				chunksAttempted++
 			}
 			stepFn(done, label)
@@ -303,10 +302,16 @@ func applyPreview(repoRoot string, preview map[scribe.Doc]string, answers wizard
 	if err != nil {
 		return fmt.Errorf("scribe init: %w", err)
 	}
+	// Track what actually lands. A repo with no prior sessions has nothing to
+	// replay, so CHANGELOG and JOURNAL legitimately don't get created — and
+	// reporting all four regardless (as this did) sends the operator looking
+	// for files that aren't there.
+	var written []string
 	for _, doc := range []scribe.Doc{scribe.DocProject, scribe.DocDecisions} {
 		if err := store.WriteState(doc, preview[doc]); err != nil {
 			return fmt.Errorf("scribe init: writing %s: %w", doc, err)
 		}
+		written = append(written, string(doc))
 	}
 	for _, doc := range []scribe.Doc{scribe.DocChangelog, scribe.DocJournal} {
 		content := preview[doc]
@@ -316,6 +321,7 @@ func applyPreview(repoRoot string, preview map[scribe.Doc]string, answers wizard
 		if err := store.AppendHistory(doc, content); err != nil {
 			return fmt.Errorf("scribe init: writing %s: %w", doc, err)
 		}
+		written = append(written, string(doc))
 	}
 
 	binPath, err := os.Executable()
@@ -336,18 +342,77 @@ func applyPreview(repoRoot string, preview map[scribe.Doc]string, answers wizard
 		return fmt.Errorf("scribe init: writing config: %w", err)
 	}
 
-	docNames := make([]string, len(scribe.AllDocs))
-	for i, d := range scribe.AllDocs {
-		docNames[i] = string(d)
+	ignored, err := ensureGitignore(repoRoot)
+	if err != nil {
+		return fmt.Errorf("scribe init: %w", err)
 	}
-	fmt.Fprintf(out, "\nWrote %s/{%s}\n", scribe.DocsDir, strings.Join(docNames, ","))
+
+	fmt.Fprintf(out, "\nWrote %s/{%s}\n", scribe.DocsDir, strings.Join(written, ","))
+	if len(written) < len(scribe.AllDocs) {
+		fmt.Fprintln(out, "CHANGELOG.md and JOURNAL.md start empty — this repo has no past sessions to replay.")
+	}
 	if hookResult.AlreadyPresent {
 		fmt.Fprintln(out, "Stop hook was already installed.")
 	} else {
 		fmt.Fprintf(out, "Installed Stop hook in %s\n", hookResult.SettingsPath)
 	}
+	if ignored {
+		fmt.Fprintf(out, "Added %s/ and %s/ to .gitignore\n", scribe.StateDir, scribe.DocsDir)
+	}
 	fmt.Fprintln(out, "\nscribe is now on for this repo — the four docs stay current after every reply.")
 	return nil
+}
+
+// gitignoreEntries are what init adds to an onboarded repo. .scribe/ is
+// pure local state (queue, lock, offsets, logs) and has no business in
+// anyone's history. docs/scribe/ follows PLAN.md's "gitignore for the first
+// week regardless" stance while the committed-or-ignored question is still
+// open (OPEN-ITEMS item 3) — if that lands on "commit them", this is the
+// one place to change.
+var gitignoreEntries = []string{scribe.StateDir + "/", scribe.DocsDir + "/"}
+
+// ensureGitignore appends whichever of gitignoreEntries the repo's
+// .gitignore doesn't already have, and reports whether it changed anything.
+//
+// Without this, `scribe init` leaves the operator with a repo full of
+// untracked files it created itself, which reads as scribe making a mess of
+// their working tree. It appends rather than rewrites, and matches on exact
+// lines so a repo that already ignores these (this one does) is untouched.
+func ensureGitignore(repoRoot string) (bool, error) {
+	path := filepath.Join(repoRoot, ".gitignore")
+	existing, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, fmt.Errorf("reading .gitignore: %w", err)
+	}
+
+	have := make(map[string]bool)
+	for _, line := range strings.Split(string(existing), "\n") {
+		have[strings.TrimSpace(line)] = true
+	}
+
+	var missing []string
+	for _, e := range gitignoreEntries {
+		if !have[e] {
+			missing = append(missing, e)
+		}
+	}
+	if len(missing) == 0 {
+		return false, nil
+	}
+
+	var b strings.Builder
+	b.Write(existing)
+	if len(existing) > 0 && !strings.HasSuffix(string(existing), "\n") {
+		b.WriteString("\n")
+	}
+	b.WriteString("\n# scribe\n")
+	b.WriteString(strings.Join(missing, "\n"))
+	b.WriteString("\n")
+
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return false, fmt.Errorf("writing .gitignore: %w", err)
+	}
+	return true, nil
 }
 
 // findGitRoot walks up from cwd looking for a .git entry (a directory for

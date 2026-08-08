@@ -212,7 +212,29 @@ func runOnce(deps Deps) error {
 		return fmt.Errorf("worker: apply edits: %w", err)
 	}
 
-	// Only now, after every doc write above has succeeded, do offsets move.
+	// Re-read after applying and compare against the "before" snapshot taken
+	// above. This is the fail-open guard from docs/findings/OPEN-ITEMS.md
+	// item 8 / docs/findings/00-writer.md: `opencode run` without `--auto`
+	// auto-rejects every edit the model attempts and still exits 0 with
+	// normal-looking JSON, so "the writer returned success" is not evidence
+	// that anything was written. We got this far because allEntries was
+	// non-empty (there was genuinely something to write about — the
+	// legitimate "nothing new happened" case already returned above, before
+	// the writer was ever called), so if the docs are still identical after
+	// applying whatever the writer sent back, that's not a quiet no-op, it's
+	// the writer silently swallowing an edit. Treat it as a failure and,
+	// per the ordering rule above, do not save any offset — the next run
+	// will retry the same transcript bytes instead of losing them.
+	after, err := deps.Docs.ReadAll()
+	if err != nil {
+		return fmt.Errorf("worker: read docs after apply: %w", err)
+	}
+	if docsUnchanged(current, after) {
+		return fmt.Errorf("worker: writer %q exited successfully but changed no docs (likely a silent auto-reject — see docs/findings/00-writer.md; forgetting the writer's auto-approve flag makes opencode run reject every edit and still exit 0)", deps.Writer.Name())
+	}
+
+	// Only now, after every doc write above has succeeded and actually
+	// changed something, do offsets move.
 	// See the ordering comment above the function.
 	for _, po := range offsetsToSave {
 		if err := deps.SaveOffset(po.repoRoot, scribe.Offset{
@@ -225,6 +247,24 @@ func runOnce(deps Deps) error {
 	}
 
 	return nil
+}
+
+// docsUnchanged reports whether before and after are identical for every
+// doc. Used by the fail-open guard in runOnce (see the comment there) — a
+// plain map comparison is enough because DocStore.ReadAll already gives us
+// a full, comparable snapshot for both state docs (full content) and
+// history docs (whatever ReadAll represents them as, e.g. a rendering that
+// changes when an entry is actually appended).
+func docsUnchanged(before, after map[scribe.Doc]string) bool {
+	if len(before) != len(after) {
+		return false
+	}
+	for d, v := range before {
+		if after[d] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // compile-time check that *docs.Store satisfies DocStore.
