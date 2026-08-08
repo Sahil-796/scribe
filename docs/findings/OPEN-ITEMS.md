@@ -1,4 +1,4 @@
-# Open items — as of end of phase 02
+# Open items — as of end of phase 02, plus the phase 00/01 fixes
 
 Everything that is broken, unproven, or waiting on a decision. Nothing here is
 covered by a passing test, which is precisely why it's written down.
@@ -61,49 +61,79 @@ verified as a writer connector and its connector should not be written.
 
 ## Unproven — claimed nowhere, but easy to assume
 
-### 7. The loop has never run live. Phase 01's done-when is NOT met
+### 7. The loop runs live now, but the done-when is still NOT met — see item 21
 
-Nothing has run `opencode` end to end and produced real docs in a real repo. Every
-phase 01 test uses fakes or stub executables. The plan's bar — *"work for an hour,
-touch nothing, and the four docs are current afterwards"* — has not been demonstrated.
+**Partly closed.** The loop was run end to end against real `opencode` in a throwaway
+repo: `scribe init --apply`, a real Stop hook, `scribe run`, and CHANGELOG/JOURNAL were
+genuinely updated with accurate content. Full write-up in `07-live-run.md`.
 
-**This is the single most important thing to do next.** Everything else is built on
-the assumption that it works.
+Three bugs were found and fixed doing it — all of them meant the loop could not have
+worked at all before:
 
-### 8. No fail-open guard — the highest-value small fix on the board
+- `opencodeArgv` passed `--print --auto-approve`, neither of which is a real flag.
+  The correct argv is `run [--model M] --auto <prompt>`, verified against
+  `opencode run --help` (1.18.15).
+- The default model lacked its provider prefix: `opencode/longcat-2.0-free`, not
+  `longcat-2.0-free`.
+- **`scribe run` was still `notImplemented` and nothing anywhere called
+  `internal/worker`.** Phase 01 shipped a complete, tested worker with no caller.
+  It is now implemented, and `scribe hook` spawns a detached `scribe run` after
+  enqueueing, so the loop closes without human intervention.
 
-Phase 00 found `opencode run` without `--auto` **silently auto-rejects and exits 0**
-with normal-looking JSON. The phase 01 worker currently treats exit 0 as success.
+Still not met: *"work for an hour, touch nothing, and the four docs are current
+afterwards."* One session in a scratch repo is not an hour of real work, and see
+item 21 for why the unattended path currently ends without docs landing.
 
-Until this is fixed, scribe can report success on every run while writing nothing at
-all, indefinitely, with no signal. Fix: compare doc state before and after; treat
-"exit 0, nothing changed" as a failure.
+### 8. Fail-open guard — landed, but never seen firing on a real auto-reject
 
-### 9. `isSidechain` filtering is unverified against reality
+**Fixed.** `internal/worker` now re-reads the docs after applying edits and treats
+"writer exited 0, nothing changed" as a failure; the offset does not advance. Pinned
+by a failing test first, covering both zero parsed edits and edits identical to
+existing content. A trigger that yields no new transcript entries is still a
+legitimate no-op, not an error.
 
-`PLAN.md` states this trap as confirmed. **Zero** such lines were found across 68 real
-transcripts. The filter is implemented and passes synthetic fixtures, but no real data
-has ever exercised it. Either the trap is rarer than believed, or it's recorded
-differently now. Settle before phase 03 relies on it.
+Unproven: the guard has only ever fired against a fake writer. Nobody has watched it
+catch a genuine `opencode` auto-reject, so the shape of a real auto-rejected run's
+output is still an assumption from phase 00's notes. See item 21 — a real run did trip
+the guard, but whether that was a true positive is exactly what's unclear.
 
-### 10. Stop-hook behaviour during subagents is unconfirmed
+### 9. `isSidechain` — settled
 
-Only one Stop event fired for a `Task` exchange, but the run couldn't be confirmed to
-have delegated at all. Related to item 9 — both concern subagent turns, and both are
-guesses right now.
+**Resolved.** Surveyed all 317 real transcript files on this machine. In the 120
+top-level session transcripts (38,279 lines) `isSidechain: true` appears **zero**
+times. Every line of the 197 files in per-session `subagents/` subdirectories has it
+`true`. Subagent turns are not interleaved into the main transcript at all — they are
+written to separate files, and the Stop hook's `transcript_path` only ever names the
+main one, so `Read()` never opens them.
 
-### 11. Hook failures may go nowhere
+The plan was right about the field and wrong about the mechanism. What protects scribe
+is file separation, not the filter. The filter is kept as cheap insurance and its
+comments now say so. Evidence in `09-sidechain.md`.
 
-A Stop hook exiting non-zero doesn't visibly break the session. Nobody checked whether
-that failure is logged anywhere. If it isn't, `scribe doctor` has nothing to inspect
-and silent hook death means docs stop updating with no signal — the same failure shape
-as item 8, one layer up.
+### 10. Stop-hook behaviour during subagents — better evidence, not conclusive
 
-### 12. Writer timeout is unsized
+One real burst in this repo's own history showed 7 back-to-back subagent delegations
+followed by exactly one `stop_hook_summary`. That supports "one Stop per turn
+regardless of delegation count" but is a single observation, not a proof.
 
-Cold starts measured 6–26 s with high variance — too noisy to pick a production
-timeout from. The current value is a guess. Needs real measurement under load before
-phase 04 ships config.
+### 11. Hook failures — Claude Code does record them; scribe now does too
+
+**Closed.** Established empirically with a live probe (a Stop hook that exits 1, run
+under a real `claude -p` session): Claude Code writes a `hook_non_blocking_error`
+attachment into that session's own transcript, carrying exit code, stderr, command and
+duration. So the failure was never going nowhere — but it was per-session, unaggregated,
+and somewhere `scribe doctor` had no reason to look.
+
+`scribe hook` now appends failures to a bounded (50-line) `.scribe/hook-failures.log`,
+and `scribe doctor` surfaces recent entries. Logging can never change the hook's exit
+code. Known limit: the log's read-modify-write is not process-locked, so two
+simultaneous failures in one repo could drop a line.
+
+### 12. Writer timeout — measured, current value supported
+
+**Closed at the current value.** Five real `opencode` runs measured 7.8–15.6 s, mean
+~10.2 s; combined with phase 00's 6–26 s, the existing 3-minute timeout has ample
+headroom. Not tightened — the variance doesn't justify it.
 
 ### 13. opencode permissions are pre-opened on this machine
 
@@ -159,15 +189,59 @@ should do here — leave it, warn, or write the entries.
 All keys and values survive; original key order does not. Byte-exact preservation
 would need a JSON AST library, which isn't a dependency.
 
+### 21. The unattended loop runs, but the docs don't land — start here
+
+**The most important open item now, and the direct successor to item 7.**
+
+With everything above fixed, a real `claude -p` Stop hook in a throwaway repo caused
+`scribe hook` to enqueue and automatically spawn `scribe run`, which took the per-repo
+lock and called real `opencode` with nobody touching anything. The automation works.
+
+But that run then failed the item-8 guard:
+
+```
+worker: writer "opencode" exited successfully but changed no docs
+```
+
+No offset file was written, and a manual re-run reproduced it. **What's unknown is
+whether the guard is right.** Either `opencode` genuinely made no edit — a true
+positive, and the guard doing exactly its job — or it did edit and the content
+round-tripped to identical bytes, making this a false positive that will block every
+run. The same command path worked earlier in a manual smoke test, which is what makes
+this worth diagnosing rather than guessing.
+
+Needs someone in `internal/worker` / `internal/docs` / `internal/writer` with the real
+stdout of a failing run in hand.
+
+### 22. Concurrency under real triggers is still unproven
+
+Offset advancement across sessions, multi-trigger coalescing, and the per-repo lock
+under genuine contention have only been exercised by `internal/worker`'s fakes. Live,
+only a single uncontended lock acquire/release has been observed.
+
+### 23. Hook spawn failures are not logged
+
+`scribe hook` swallows a failed spawn of `scribe run` rather than logging it, because
+`internal/hook`'s failure logger is unexported and was outside the allowlist of the
+change that added spawning. The trigger stays safely queued, but a persistently
+failing spawn is invisible — the same failure shape as item 11.
+
 ---
 
 ## Process notes
 
-- **Neither PR is merged.** [#1](https://github.com/Sahil-796/scribe/pull/1) is phase
-  00, [#2](https://github.com/Sahil-796/scribe/pull/2) is phase 01.
-- **They were opened as siblings, not a stack** — no file overlap, no code dependency.
-  This branch has since merged phase 00 in, so continuing from `phase-01-loop` gives
-  you everything. That does mean PR #2's diff now includes phase 00's files.
+- **No PR is merged.** [#1](https://github.com/Sahil-796/scribe/pull/1) is phase 00,
+  [#2](https://github.com/Sahil-796/scribe/pull/2) is phase 01. Phase 02 and these
+  fixes are stacked on top as two further PRs.
+- **#1 and #2 were opened as siblings, not a stack** — no file overlap, no code
+  dependency. `phase-01-loop` has since merged phase 00 in, so PR #2's diff includes
+  phase 00's files.
 - Phase 01 was built before phase 00's gate verdict was in, at the user's request.
   The gate passed, so this cost nothing — but the writer connector was being built on
   an unvalidated assumption for the duration.
+- Phase 02 and the fixes above were built by a fleet of Sonnet subagents with hard
+  file-ownership allowlists and a scope-diff gate. Zero out-of-scope files, zero
+  contested files. It was also expensive — twelve agents, each reading the codebase
+  cold, and the agents driving real `opencode` and `claude -p` sessions dominated
+  both wall-clock and token cost. Fan out on breadth; don't fan out on work that is
+  mostly waiting on a slow external process.
