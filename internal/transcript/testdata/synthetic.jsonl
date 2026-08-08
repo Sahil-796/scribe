@@ -1,0 +1,4 @@
+{"parentUuid":null,"isSidechain":false,"type":"user","timestamp":"2026-08-08T05:07:09.000Z","message":{"role":"user","content":"do the thing"}}
+{"parentUuid":"a","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:10.000Z","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You've hit your session limit · resets 9:20pm"}]}}
+{"parentUuid":"b","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:11.000Z","message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"No response requested."}]}}
+{"parentUuid":"c","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:12.000Z","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"Done, the thing is complete."}]}}

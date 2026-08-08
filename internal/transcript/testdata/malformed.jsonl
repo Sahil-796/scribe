@@ -1,0 +1,3 @@
+{"parentUuid":null,"isSidechain":false,"type":"user","timestamp":"2026-08-08T05:07:09.000Z","message":{"role":"user","content":"before the bad line"}}
+this is not json at all {{{
+{"parentUuid":"a","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:11.000Z","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"after the bad line"}]}}

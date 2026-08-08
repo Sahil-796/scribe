@@ -1,0 +1,7 @@
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-08-08T05:07:08.627Z","sessionId":"s1"}
+{"parentUuid":null,"isSidechain":false,"type":"user","timestamp":"2026-08-08T05:07:09.000Z","message":{"role":"user","content":"hello, can you help me plan this feature?"}}
+{"parentUuid":"a","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:10.000Z","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"thinking","thinking":"let me think about this"}]}}
+{"parentUuid":"b","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:11.000Z","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file":"x.go"}}]}}
+{"parentUuid":"c","isSidechain":false,"type":"user","timestamp":"2026-08-08T05:07:12.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"package main\n"}]}}
+{"parentUuid":"d","isSidechain":false,"type":"assistant","timestamp":"2026-08-08T05:07:13.000Z","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"Sure, here is the plan."}]}}
+{"type":"custom-title","customTitle":"Feature planning","sessionId":"s1"}
