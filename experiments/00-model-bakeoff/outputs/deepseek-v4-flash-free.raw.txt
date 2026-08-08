@@ -1,0 +1,73 @@
+[0m
+> build · deepseek-v4-flash-free
+[0m
+## CHANGELOG.md
+
+### 2026-07-31
+
+**Trend tab — timeline 422 fixed via cursor pagination**
+- `trend-tab.tsx` requested `limit=200`; the Elysia route `/api/companies/:trackedId/timeline` caps `limit` at 100 and 422-jected. Rather than raise the server cap, the client now pages: `fetchTimelineWindow()` pulls 100-at-a-time, newest first, and stops when a page's oldest event falls before the chart window (start = `summary.series[0].weekOf` − 7 days, the same cutoff `bucketWeekOf` uses), on `nextCursor` exhaustion, or after 5 pages (500 events) as a safety bound. `tsc --noEmit` clean.
+
+**Crawler — skip comparison-farm pages**
+- Added `/alternatives/`, `/alternative-to/`, `/compare/`, `/vs/` (trailing slashes deliberate) to `defaultSkipPaths` in `crawler.go`. The `/alternatives` hub still crawls; only the per-competitor children are dropped, freeing ~12 of the 50-page budget on appthetics.com. Still overridable via the existing `skipPaths` / `skipPathsOverride` request fields. New `go test` case `TestCrawlSkipsComparisonFarmPages`; `go test ./...` green.
+
+**Pricing extraction — homepage-section fallback**
+- `findPricingPages` now falls back to the landing page when no pricing-typed or `/pricing`-path page exists, gated on a pricing heading plus visible prices or ≥2 tier-like headings (a bare "Pricing" nav link doesn't qualify). The server's LLM fallback in `normalize.ts` switched from `findPagesByType(pages, "pricing")` to the same `findPricingPages` candidate set so the homepage actually reaches the model. Verified against appthetics's stored homepage snapshot → Lite $5/mo, Pro $11.67/mo, plus a lifetime tier.
+
+**LLM pricing — densest-window truncation + arithmetic repair**
+- `truncate()` previously took the first 8000 chars; on appthetics the pricing section sits ~20k in, so the model saw only marketing and answered `is_gated: true`. Now picks the 8000-char window covering the densest run of price tokens with 1000 chars of lead-in for the section heading.
+- `parseJsonFromText` now handles prose/markdown-wrapped JSON (direct parse → fenced block → substring between first `{` and last `}`).
+- `repairArithmeticLiterals` neutralizes inline math in numeric fields (model returned `12 * 12 * 0.75` instead of `108`); tightly-scoped regex, evaluated before `JSON.parse`. Plus a prompt instruction ("numbers only") as a first-aid, not the safety net. Parser fixes verified against the captured bad response and a fresh live cal.com run (Teams $9/mo, Organizations $21/mo populated).
+
+**Remove company menu — fixed**
+- `company-actions.tsx`: Base UI dropdown doesn't fire `onSelect`, so the ⋯ menu's "Remove company"/"Stop tracking" did nothing. Both menu items now wired to `onClick`.
+
+**Tab navigation UX — instant pill, skeleton, middleware off the hot path**
+- `tab-nav.tsx`: active pill now reads `useSearchParams()` instead of a server-passed prop, so it highlights the instant the URL changes.
+- `page.tsx` wraps tab content in `<Suspense>` keyed on `tab:date` with new `tab-content-skeleton.tsx` fallback — header/nav stay put, only the content area shimmers.
+- `middleware.ts`: skips the blocking `/api/me/limits` fetch for client-side (RSC) navigations, detected via Next's `next-url` request header (confirmed by dumping live headers — `rsc` header and `_rsc` query param never reach middleware in this Next version). Tab-click proxy timing dropped ~1.4s → 2ms.
+
+**Recrawl script added**
+- New `apps/server/scripts/recrawl.ts` enqueues the same `crawl.run` job the add-company flow uses: `bun run scripts/recrawl.ts <domain>` from `apps/server`. Tested against appthetics.com; also note `getBoss()` needs `startBoss()` (server boot) first.
+
+**Companies table cleanup (DB, not code)**
+- Deleted 11 rows: 6 fabricated `.scout-demo.test` companies and `stand.store` (zero real trackers), plus `linear.app`, `stripe.com`, `vercel.com`, `notion.so` after removing the `sahil@test.dev` seed account's `tracked_companies` (cascade). Six real tracked companies remain: cal.com…, rezi.com, groq.com, figma.com, browserstack.com, appthetics.com, stan.store.
+
+**GitHub issue #2 opened**
+- "Crawler misses JS-rendered (SPA) sites — no content extracted" (stan.store: empty `content`/`headings`/`navLinks` across 7 crawls; root cause in `fetch`'s plain `net/http` GET, no JS). Proposes a headless-rendering fallback as a planned feature.
+
+**Committed — 7 commits on `feat/memory-and-interpretation`, not pushed:** `16fc362` cursor pagination, `ca38710` crawler skip-paths, `f5adb36` homepage pricing, `e5e210` densest-window + arithmetic repair, `46e600f` menu onClick, `df0e66c` tab-pill/Suspense/middleware, `c2e5daa` recrawl script. All `go test`, `bun run check-types` clean (the single `embed.test.ts` failure in `packages/ai` is pre-existing, reproduced on a stashed baseline). Two untracked files left alone: `apps/server/undefined/db-backup-*.json` (stray artifact from a script that got `undefined` as an output path) and `docs/gap-plan.html`.
+
+## JOURNAL.md
+
+### 2026-07-31
+
+Long day; the session opened on yesterday's trend-tab 422 and ended with a architecture proposal we deliberately didn't ship yet. Recording what actually mattered.
+
+**The trend 422 was a happy accident of a bug.** `/api/companies/:id/timeline` caps `limit` at 100; the client asked for 200 and got Elysia's cold shoulder. Instead of matching the cap on the server, we made the client paginate by boring a window worth of history — turns out the old flat-200 could *true truncate the 12-week window on a busy company anyway*, so the "bugfix" is genuinely more correct. Small win, correctly framed.
+
+**appthetics.com "got no data" — real lesson in how the crawler eats its budget.** The crawl succeeded; the signal was in the wrong places (no pricing/jobs/changelog tab → looks like nothing). The 50-page frontier got spent entirely on `/alternatives/*` + blog posts in sitemap order *before the root page's discovered links were even dequeued*, with a plain FIFO queue. First instinct was "raise the budget" — caught myself: raising it just moves the cliff on a 500-post blog. User's question decided scope: `can't we skip alternatives?` — yes, cheaply, via a skip-list, done.
+
+**Homepage-section pricing took three parts to line up, and the *last one silently defeated the first two*.** (1) `findPricingPages` had to include the landing page; (2) the server fallback was filtering on `page_type` only, so the homepage *never reached the LLM*; (3) — and this hurt — `truncate()` took the first 8k chars, and appthetics' pricing lives ~20k chars in behind testimonials, so even once the homepage reached the model it saw a wall of marketing and answered `is_gated: true`. The densest-window picker fixed it. This one is worth remembering: `is_gated: true` is now a heads-up for "model didn't see the prices," not a statement about the site.
+
+**cal.com's pricing took three wrong turns before it worked.**
+1. "Markdown wrapping" — *not it*. The response was valid-ish JSON, the parse just failed on no fences. B5: my first parse-fix didn't change anything.
+2. Then: the model wrote `"price_annual": 12 * 12 * 0.75` — an unevaluated arithmetic expression, showing its work on "$12/mo billed annually at 25% off." Never expected an LLM to *put the multiplication in the JSON*. Fix: regex-repair the arithmetic + prompt "lūdīt valid."
+3. **Prompt alone was never going to be enough, and the real pipeline rerun proved it — same crash again.** That's the one-line moral: with non-deterministic LLM output, "ask it to comply" is not robustness. The tolerant parser is the fix; the prompt is just cosmetics.
+Ended verified against a *fresh* crawl→normalize→job run, not just a fixture: four tiers, real prices, tab renders. Also noted honestly: model still calls the lifetime tier "One time", $79 null — a known weak spot.
+
+**The Wayback backfill is the secret sauce and the source of the confusion.** rezi.ai's "60% wrong messaging" and the "how does a fresh 2026-07-31 crawl show months of history?" are the same story: on first-add, backfill pulls up to 6 web.archive.org snapshots over 24mo, normalizes each, diffs pairwise — bad archive captures produce plausible-but-wrong messaging diffs. cal.com "timeline" = your crawl diffed on top of 2 years of Wayback, which is a nice trick and worth it, but it circles in a real product question I flagged (not built): the first live crawl says **everything was "added today"** next to proof it existed last year. Proposed suppressing first-crawl `PAGE_ADDED` events; user has it in their hands.
+
+**stan.store: a genuinely different failure class than appthetics.** Plain-HTTP shell — no content at all, `pagesOk: 1` every time; no page-targeting or normalizer fix touches it. Filed #2 (headless-rendering fallback) instead of hacking it.
+
+**Companies-table cleanup — threading required.** `companies` is shared across all tenants; "delete a row" cascades into a different user tracking it. Identified by FK orphaning, not by name-matching (surfaced `stand.store` that way). Removed 11 rows; 6 real companies survived. One end-of-night note I left: the second real recrawl of appthetics "lost" its pricing entity entirely — likely `persistPage` skipping unchanged-rows + `loadLatestSnapshotsPerUrl`. Side I chased, didn't solve, might matter.
+
+**Today's two most humbling dead-ends, so they don't happen again.**
+- The `next-url` vs `rsc` saga: spent two restarts on the assumption the documented RSC hint would be in request headers. Dumped actual headers: Next dev's signal for tab-clicks is `next-url`, not `rsc` / `_rsc`. Middleware tele-only.
+- recrawl script: `getBoss()` without `start()` first. Wrote the script with call 1, hit the D-BG staff redirect, sorted it — the "add company" flow calls `startBoss()` at boot so it never shows.
+
+**calendly — analysis only, per instruction.** "Empty tabs NOT pipeline problems; the normalizers treat DOM assumption as the world." Careers text 2468 chars but zero `. looksLikeJobTitle`; homepage has *no `<h1>`* in extraction. Both normalizer-shaped. Which produced, finally, the right-shaped architectural pitch (not built yet — awaiting green light). Unbounded table of assumptions → LLM-first extraction via `generateObject` + Zod, schema-governed, with the "change detection fragility" honest trade: temperature 0, hash-gate re-extraction, cost ~$2/yr for 6 companies weekly. dex cover: ATS APIs for jobs, headless for SPA (#2). Marked clearly as proposal.
+
+**Worth noting to ourselves:** seven.sixth with the "timeline from a fresh crawl" question got dropped once; I chased cal.com bug instead. That's exactly the kind of non-answer user hates. The user was *entitled* ask. Would like to not repeat that.
+
+Good day overall: 7 focused commits, only one pre-existing failure (`embed.test.ts` at `aai` v3 on shared-process — baseline-reproduced), everything verified against real captures and real pipeline runs, not fixtures.

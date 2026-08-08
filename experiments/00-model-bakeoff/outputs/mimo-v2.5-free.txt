@@ -1,0 +1,50 @@
+
+> build · mimo-v2.5-free
+
+## CHANGELOG.md
+
+### 2026-07-31
+
+**Fixed**
+
+- Timeline tab 422 error: replaced flat `limit=200` with cursor-based pagination that pages through the API's max-100 cap, fetching exactly as far back as the chart window needs. (`trend-tab.tsx`)
+- Remove button on company actions menu: Base UI dropdown requires `onClick`, not `onSelect`. Fixed both menu items. (`company-actions.tsx`)
+- Tab navigation UX: active tab pill now updates instantly from `useSearchParams()` (no server round-trip); tab content wrapped in `<Suspense>` with skeleton fallback; middleware no longer blocks client-side tab navigations with a redundant `/api/me/limits` fetch (drops `proxy.ts` from ~1.4s to ~2ms on tab clicks). (`tab-nav.tsx`, `page.tsx`, `tab-content-skeleton.tsx`, `middleware.ts`)
+- Crawler skips comparison-farm pages (`/alternatives/*`, `/alternative-to/*`, `/compare/*`, `/vs/`) by default, freeing crawl budget for real content. Trailing slash means the `/alternatives` hub page still gets crawled. (`crawler.go`)
+- Pricing extraction from homepage sections: when no `/pricing` route exists, `findPricingPages` falls back to the landing page (gated on pricing heading + visible prices or ≥2 tier-like headings). Server's LLM fallback and `truncate()` window updated to match — window now picks the densest 8000-char region of price tokens. (`pricing.ts`, `normalize.ts`, `extract-pricing.ts`)
+- LLM pricing output: added `repairArithmeticLiterals` to evaluate inline math expressions (e.g. `12 * 12 * 0.75` → `108`) before JSON.parse, and hardened `parseJsonFromText` to handle prose/markdown-wrapped JSON. Prompt also instructs the model to output plain numbers. Fixes cal.com's pricing extraction where the LLM showed its work instead of computing values. (`ai/src/extract-pricing.ts`)
+
+**Added**
+
+- `apps/server/scripts/recrawl.ts` — manual recrawl script (no UI for this existed). Usage: `bun run scripts/recrawl.ts <url>` from `apps/server`.
+
+**Removed**
+
+- 11 seed/fixture companies from `companies` table (6 fake `.scout-demo.test` rows, `stand.store`, `linear.app`/`stripe.com`/`vercel.com`/`notion.so` that only the `sahil@test.dev` seed account tracked). All cascaded cleanly to snapshots and events. The 6 real tracked companies (`rezi.ai`, `groq.com`, `figma.com`, `browserstack.com`, `appthetics.com`, `stan.store`) untouched.
+
+---
+
+## JOURNAL.md
+
+### 2026-07-31
+
+**Crawler budget exhaustion on appthetics.com** — User added `https://www.appthetics.com/` and got no data. Turned out the 50-page budget was consumed entirely by sitemap URLs (`/alternatives/*`, blog posts) in FIFO order before any root-discovered links got dequeued. The `/alternatives/` sub-pages are comparison-farm spam (12 pages, each a thin "vs X" landing) — skipped them by adding path prefixes to `defaultSkipPaths`. `/pricing` doesn't exist as a page on this site; it's anchored on the homepage. Added homepage-section pricing fallback gated on heading + price/token presence to avoid false positives on bare nav links. This was the first real (non-fixture) site the pipeline had ingested end-to-end — every normalizer's DOM-shape assumption broke on a different site shape.
+
+**Remove button silent failure** — Base UI's dropdown menu fires `onSelect` for keyboard selection but `onClick` for mouse clicks. The company actions menu used `onSelect`, so clicking "Remove company" did nothing. Settings page's X button used a different component (server action + revalidatePath) and worked fine. Confirmed both routes to the same `DELETE /api/companies/:trackedId` endpoint.
+
+**Tab navigation felt broken** — Three compounding issues stacked into 2–3 second dead air per tab click: (1) active tab highlight was server-prop-driven, so the pill didn't move until the full page re-fetched; (2) no Suspense boundary meant `loading.tsx` never showed for tab switches (only full page loads); (3) middleware did a blocking `fetch` to `/api/me/limits` on every `/company/*` navigation, adding 600ms–1.4s of pure latency. The middleware fix was the most tedious — Next.js client navigations use a `next-url` request header, not the commonly-documented `rsc` header or `_rsc` query param (those don't reach middleware in this Next version). Verified by dumping real request headers, then confirmed `proxy.ts` timing dropped from ~1.4s to ~2ms.
+
+**First pricing fix (homepage sections) worked, second (LLM arithmetic) didn't hold** — Added `repairArithmeticLiterals` and a prompt instruction telling the model to output plain numbers. The real pipeline still failed on the next run because LLM output is non-deterministic — a prompt instruction alone can't guarantee compliance. Made the parser itself tolerant with a regex that evaluates `digits/./whitespace/+/-/*/` expressions before `JSON.parse` ever sees them. This is the general lesson: **prompt fixes are soft constraints, parser fixes are safety nets**. The model wrote `12 * 12 * 0.75` instead of `108` because cal.com's page says "$12/mo, billed annually at 25% off" and the model tried to show its work inline.
+
+**Wayback backfill explains "fresh" timelines** — Both rezi.ai and cal.com showed months of historical change events immediately after being added. The `companies` table is shared across tenants and a Wayback Machine backfill runs on first-add, pulling up to 6 archived snapshots from `web.archive.org` over 24 months. The live crawl diffs against the most recent Wayback snapshot, so you get a full backdated history on day one. Tradeoff: archive.org captures of JS-heavy sites can be incomplete, producing plausible-looking but wrong diffs (the "60% incorrect messaging" on rezi.ai).
+
+**First-crawl "added" events contradict backfill** — Backfill runs *after* the first live crawl's diff, so `diff.run` sees zero prior page history and generates `PAGE_ADDED` events for everything. Then backfill lays historical snapshots underneath, making the "added today" events visibly wrong next to proof the page existed a year ago. The fix is to suppress added events on a company's first crawl (no reliable prev exists regardless of backfill timing). Discussed but not implemented.
+
+**stan.store is an SPA — different failure class** — Raw HTML is an empty `<div id="root">` shell. Plain HTTP fetch gets nothing. Needs headless rendering (Playwright/Chromium). Filed as GitHub issue #2. Distinct from the page-targeting issues on appthetics/calendly where real HTML existed but normalizers couldn't parse it.
+
+**Calendly's two problems are normalizer assumptions, not fetch failures** — Careers page exists and crawled fine, but job listings render via an embedded ATS widget (Greenhouse/Lever-style) that doesn't expose job titles in HTML. Homepage crawled with real content but has no `<h1>` element — topmost heading is `<h2>`. Both tabs render empty despite content being in the DB.
+
+**The pattern across every failure today** — Every normalizer hardcodes a DOM-shape assumption (messaging needs `<h1>`, pricing needs `h2`/`h3` tier headings, jobs need Title-Case `h2`/`h3`/`h4`). Each site markets itself with different markup. Only pricing has an LLM fallback; the other three have no escape hatch. Proposed LLM-first normalization using `generateObject` with Zod schemas for all five kinds — cost is negligible (~$2/year at current scale), and content-hash gating means $0 on unchanged crawls. Non-determinism tradeoff for change detection is real (phantom "Hero Rewrite" events from reworded output) but addressable with temperature 0 + hash gating + judge step. Discussed but not implemented.
+
+**Seven commits, none on the right branch** — All committed to `feat/memory-and-interpretation` but nothing relates to memory/interpretation; they're crawl-pipeline and UI fixes from this session. The `embed.test.ts` failure in the Bun suite is pre-existing (confirmed on stashed baseline — `ai` v3's `embedMany` export breaks when another ai test shares the process).
+
