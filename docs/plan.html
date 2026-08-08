@@ -1,0 +1,817 @@
+<title>sessionscribe — build plan</title>
+<style>
+  :root {
+    --ground: #ffffff;
+    --panel: #f5f6f5;
+    --ink: #0d0d0d;
+    --ink-2: #55585a;
+    --ink-3: #8b8f90;
+    --rule: #dcdedd;
+    --rule-strong: #0d0d0d;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0c0d0d;
+      --panel: #151717;
+      --ink: #ededea;
+      --ink-2: #9a9e9c;
+      --ink-3: #6c706e;
+      --rule: #272a2a;
+      --rule-strong: #ededea;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0c0d0d;
+    --panel: #151717;
+    --ink: #ededea;
+    --ink-2: #9a9e9c;
+    --ink-3: #6c706e;
+    --rule: #272a2a;
+    --rule-strong: #ededea;
+  }
+  :root[data-theme="light"] {
+    --ground: #ffffff;
+    --panel: #f5f6f5;
+    --ink: #0d0d0d;
+    --ink-2: #55585a;
+    --ink-3: #8b8f90;
+    --rule: #dcdedd;
+    --rule-strong: #0d0d0d;
+  }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 72px 28px 120px;
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead { border-bottom: 2px solid var(--rule-strong); padding-bottom: 28px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    margin-bottom: 22px;
+  }
+  h1 {
+    font-size: clamp(38px, 7vw, 60px);
+    line-height: 1.02;
+    letter-spacing: -0.035em;
+    font-weight: 680;
+    text-wrap: balance;
+    margin-bottom: 18px;
+  }
+  .standfirst {
+    font-size: 18px;
+    color: var(--ink-2);
+    max-width: 60ch;
+    line-height: 1.55;
+  }
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 28px;
+    margin-top: 26px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .meta-row b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- sections ---------- */
+  section { border-bottom: 1px solid var(--rule); padding: 44px 0; }
+  section:last-of-type { border-bottom: none; }
+  .sec-head {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 24px;
+    align-items: baseline;
+    margin-bottom: 26px;
+  }
+  .sec-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    color: var(--ink-3);
+    text-transform: uppercase;
+  }
+  h2 {
+    font-size: 25px;
+    letter-spacing: -0.022em;
+    font-weight: 650;
+    text-wrap: balance;
+  }
+  .sec-body { display: grid; grid-template-columns: 92px 1fr; gap: 24px; }
+  .sec-body > .col { display: flex; flex-direction: column; gap: 18px; }
+  .sec-body > .spacer { display: block; }
+  p { max-width: 66ch; }
+  .lede { color: var(--ink-2); }
+  strong { font-weight: 620; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.87em;
+    background: var(--panel);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+
+  /* ---------- flow diagram ---------- */
+  .flow {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.75;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    padding: 22px 24px;
+    overflow-x: auto;
+    white-space: pre;
+    color: var(--ink);
+  }
+
+  /* ---------- locked decisions ---------- */
+  .locked { display: flex; flex-direction: column; gap: 0; }
+  .lock-item {
+    display: grid;
+    grid-template-columns: 26px 1fr;
+    gap: 14px;
+    padding: 15px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .lock-item:first-child { border-top: none; padding-top: 0; }
+  .lock-mark {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    padding-top: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .lock-title { font-weight: 620; margin-bottom: 3px; }
+  .lock-why { color: var(--ink-2); font-size: 15px; max-width: 62ch; }
+
+  /* ---------- doc table ---------- */
+  .docs { display: flex; flex-direction: column; gap: 0; }
+  .doc-group-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+    padding: 18px 0 10px;
+    border-top: 1px solid var(--rule);
+  }
+  .docs > .doc-group-label:first-child { border-top: none; padding-top: 0; }
+  .doc-row {
+    display: grid;
+    grid-template-columns: 168px 1fr;
+    gap: 20px;
+    padding: 11px 0;
+    align-items: baseline;
+  }
+  .doc-name {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .doc-desc { color: var(--ink-2); font-size: 15px; }
+
+  /* ---------- phases ---------- */
+  .phases { display: flex; flex-direction: column; gap: 0; }
+  .phase {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 24px;
+    padding: 26px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .phase:first-child { border-top: 2px solid var(--rule-strong); }
+  .phase-rail { display: flex; flex-direction: column; gap: 5px; }
+  .phase-id {
+    font-family: var(--mono);
+    font-size: 21px;
+    font-weight: 500;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .phase-cost {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+  .phase-main { display: flex; flex-direction: column; gap: 11px; }
+  .phase-name {
+    font-size: 19px;
+    font-weight: 640;
+    letter-spacing: -0.018em;
+  }
+  .phase-goal { color: var(--ink-2); font-size: 15px; max-width: 62ch; }
+  ul.tasks { list-style: none; display: flex; flex-direction: column; gap: 7px; }
+  ul.tasks li {
+    position: relative;
+    padding-left: 20px;
+    font-size: 15px;
+    max-width: 62ch;
+  }
+  ul.tasks li::before {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 10px;
+    width: 7px;
+    height: 1px;
+    background: var(--ink-3);
+  }
+  .gate {
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    border-left: 2px solid var(--rule-strong);
+    padding: 9px 0 9px 14px;
+    color: var(--ink);
+    max-width: 60ch;
+  }
+  .gate b { letter-spacing: 0.08em; text-transform: uppercase; font-size: 10.5px; display: block; color: var(--ink-3); margin-bottom: 3px; }
+
+  /* ---------- open questions ---------- */
+  .open-q {
+    border: 1px solid var(--rule);
+    padding: 20px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .open-q-title { font-weight: 640; font-size: 16px; }
+  .opts { display: flex; flex-direction: column; gap: 0; }
+  .opt {
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 12px;
+    padding: 10px 0;
+    border-top: 1px dotted var(--rule);
+    font-size: 15px;
+  }
+  .opt:first-child { border-top: none; padding-top: 0; }
+  .opt-k {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    padding-top: 4px;
+  }
+  .opt-name { font-weight: 600; }
+  .opt-note { color: var(--ink-2); }
+  .minor { display: flex; flex-direction: column; gap: 8px; }
+  .minor div { font-size: 15px; color: var(--ink-2); }
+  .minor b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- risks ---------- */
+  .risk {
+    display: grid;
+    grid-template-columns: 20px 1fr;
+    gap: 14px;
+    padding: 14px 0;
+    border-top: 1px solid var(--rule);
+  }
+  .risk:first-child { border-top: none; padding-top: 0; }
+  .risk-mark { font-family: var(--mono); font-size: 13px; color: var(--ink-3); }
+  .risk-head { font-weight: 620; margin-bottom: 2px; }
+  .risk-body { color: var(--ink-2); font-size: 15px; max-width: 62ch; }
+
+  footer {
+    padding-top: 40px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  @media (max-width: 680px) {
+    .wrap { padding: 44px 20px 80px; }
+    .sec-head, .sec-body, .phase { grid-template-columns: 1fr; gap: 12px; }
+    .sec-body > .spacer { display: none; }
+    .phase-rail { flex-direction: row; align-items: baseline; gap: 12px; }
+    .doc-row { grid-template-columns: 1fr; gap: 3px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Build plan / draft 2</div>
+    <h1>sessionscribe</h1>
+    <p class="standfirst">Claude Code already writes a full transcript of every session. This reads it and keeps four markdown docs per repo current — automatically, with no manual input — using a second agent so your own session stays out of it.</p>
+    <div class="meta-row">
+      <span>Trigger <b>every Claude reply</b></span>
+      <span>Writer <b>opencode, configurable model</b></span>
+      <span>Scope <b>per repo</b></span>
+      <span>Phases <b>8</b></span>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-num">01</div>
+      <h2>The loop</h2>
+    </div>
+    <div class="sec-body">
+      <div class="spacer"></div>
+      <div class="col">
+        <div class="flow">Claude finishes a reply
+        │
+        ▼
+  Stop hook  ──────────  no model, exits in ms
+        │                gets session id, transcript path, cwd
+        ▼
+  queue + per-repo lock
+        │
+        │  busy? ──▶ mark pending, exit
+        ▼
+  opencode run
+        │
+        ├── reads  transcript bytes since last run
+        ├── reads  the four docs as they stand
+        └── edits  whichever docs actually changed
+        │
+        ▼
+  pending set? ──▶ run again, covering what arrived</div>
+        <p class="lede">The docs are the memory. That's how a run knows what an earlier run claimed, and can take it back — which is the normal case, not an edge case.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-num">02</div>
+      <h2>Locked</h2>
+    </div>
+    <div class="sec-body">
+      <div class="spacer"></div>
+      <div class="col locked">
+
+        <div class="lock-item">
+          <div class="lock-mark">01</div>
+          <div>
+            <div class="lock-title">Trigger on every Claude reply, not on session end</div>
+            <div class="lock-why">Session end can't be caught reliably — crash, kill, closed window, all silent. A reply ending always fires.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">02</div>
+          <div>
+            <div class="lock-title">Writes go straight to the real docs, corrections included</div>
+            <div class="lock-why">If reply 2 claims a thing and reply 3 scraps it, the next run pulls it from PROJECT and writes a DECISIONS entry saying why it was dropped. Being wrong and reversing is recorded, not hidden.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">03</div>
+          <div>
+            <div class="lock-title">One run at a time per repo, with coalescing</div>
+            <div class="lock-why">Queue plus a lock. Triggers landing during a run set a pending flag and the current run picks them up on finish. Two processes never edit the same file, and no reply goes uncovered.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">04</div>
+          <div>
+            <div class="lock-title">Each run reads only new transcript bytes plus the current docs</div>
+            <div class="lock-why">Flat cost no matter how long the session runs. A 4 MB transcript never gets re-read, and small models stay viable.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">05</div>
+          <div>
+            <div class="lock-title">CLAUDE.md is a skill you run, not part of the pipeline</div>
+            <div class="lock-why">That file steers every future session. It gets your main model, on demand, where you can see it — never a cheap model writing unattended.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">06</div>
+          <div>
+            <div class="lock-title">The writing model is config</div>
+            <div class="lock-why">Any provider opencode supports. Free models, fable, sol, whatever — one string in a config file.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">07</div>
+          <div>
+            <div class="lock-title">It can read the code, but the transcript leads</div>
+            <div class="lock-why">Read-only access to the repo, used to check claims rather than to source them. Stops the common failure where something was discussed at length, never built, and lands in the changelog anyway. Weighting is configurable, code access can be turned off.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">08</div>
+          <div>
+            <div class="lock-title">One command onboards a repo</div>
+            <div class="lock-why"><code>scribe init</code> seeds PROJECT and DECISIONS from the repo itself, then replays that repo's past sessions into CHANGELOG and JOURNAL. Run once, per repo, when someone turns it on. Backfill isn't a separate thing — it's the second half of this.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">09</div>
+          <div>
+            <div class="lock-title">Docs live in <code>docs/scribe/</code></div>
+            <div class="lock-why">Fixed folder named after the tool. Nothing to detect, no collision with docs you already keep, obvious at a glance which files are machine-written.</div>
+          </div>
+        </div>
+
+        <div class="lock-item">
+          <div class="lock-mark">10</div>
+          <div>
+            <div class="lock-title">Git is the undo, and committing stays yours</div>
+            <div class="lock-why">No snapshot system, no auto-commit, no interference with your history. A bad write is a <code>git checkout</code> away — provided there's a commit to go back to. See the risks.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-num">03</div>
+      <h2>The four docs</h2>
+    </div>
+    <div class="sec-body">
+      <div class="spacer"></div>
+      <div class="col">
+        <div class="flow">docs/scribe/
+  PROJECT.md      what it is, where it stands
+  DECISIONS.md    what was chosen, and what was dropped
+  CHANGELOG.md    dated, what happened
+  JOURNAL.md      the mess, in full
+  INDEX.md        one line per session
+  digests/        weekly, grouped</div>
+        <div class="docs">
+          <div class="doc-group-label">Business context — current state only, no history</div>
+          <div class="doc-row">
+            <div class="doc-name">PROJECT.md</div>
+            <div class="doc-desc">What this thing is, who it's for, where it stands. Rewritten in place as reality moves.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">DECISIONS.md</div>
+            <div class="doc-desc">One block per decision, each marked active, dropped, or superseded. Dropping carries the reason.</div>
+          </div>
+
+          <div class="doc-group-label">Engineering history — kept forever</div>
+          <div class="doc-row">
+            <div class="doc-name">CHANGELOG.md</div>
+            <div class="doc-desc">Dated lines. What was built, what was fixed, what was ripped out.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">JOURNAL.md</div>
+            <div class="doc-desc">The mess. What you were stuck on, what the AI got confidently wrong, what you tried that failed, what the fix turned out to be. This is the one that stops mistakes repeating.</div>
+          </div>
+        </div>
+        <p class="lede">Most engineering sessions never touch PROJECT or DECISIONS. Those two only move when the session actually contains product-level talk — otherwise they're left alone.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-num">04</div>
+      <h2>Interface</h2>
+    </div>
+    <div class="sec-body">
+      <div class="spacer"></div>
+      <div class="col">
+        <p class="lede">Mostly there isn't one. The normal state is invisible — you work, the docs update. The CLI exists for setup, and for the moments you don't trust it.</p>
+
+        <div class="lock-title">The writer: hardcoded connectors</div>
+        <p>One connector per supported agent, each owning that tool's flags, output and failure modes. Not a generic command template — a template pushes every tool's quirks onto the user, and the first thing they hit is a silent hang because they forgot the auto-approve flag. opencode ships first; claude, codex and gemini are small additions. A <code>custom</code> escape hatch exists and is explicitly your problem if it breaks.</p>
+        <div class="flow">[writer]
+agent = "opencode"
+model = "opencode/deepseek-v4-flash-free"
+
+[code]
+read   = true      # let it look at the repo
+weight = "check"   # verify claims only, don't source from code</div>
+
+        <div class="lock-title">On and off</div>
+        <p>Off everywhere by default. <code>scribe init</code> turns it on for one repo and it stays on. Nothing ever runs where you didn't ask.</p>
+        <p class="lede">The catch: you have to remember, and the sessions most worth keeping are the early ones in a new project — exactly when scribe isn't on your mind. Mitigation that doesn't break the zero-input rule: after several sessions in an uninitialised repo, one line, once — <em>"scribe isn't on here — 6 sessions so far."</em> A nudge, not a prompt. Turning it on late still recovers the history, because init replays.</p>
+
+        <div class="docs">
+          <div class="doc-group-label">Commands</div>
+          <div class="doc-row">
+            <div class="doc-name">scribe init</div>
+            <div class="doc-desc">Turn it on here: install the hook, seed the docs, replay history. The only command most people ever run.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">scribe status</div>
+            <div class="doc-desc">On or off, last run, anything queued, anything failing.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">scribe diff</div>
+            <div class="doc-desc">What the last run changed.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">scribe run</div>
+            <div class="doc-desc">Go now, don't wait for a reply.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">scribe off / on</div>
+            <div class="doc-desc">Pause without uninstalling — sensitive work, or a thrashy session you don't want on the record. Expires at end of day unless you pass <code>--stay</code>, because a pause you forget fails the same way forgetting to turn it on does.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">scribe doctor</div>
+            <div class="doc-desc">Is the hook installed, does the writer command actually work, is the model reachable.</div>
+          </div>
+          <div class="doc-row">
+            <div class="doc-name">/claude-md</div>
+            <div class="doc-desc">The skill. Reads the four docs, writes a short CLAUDE.md with your main model, shows the diff first.</div>
+          </div>
+        </div>
+
+        <div class="lock-title">Stack</div>
+        <p>Go, cobra for the command tree, huh for the init wizard. The hook fires on every reply, so startup cost is the one hard constraint — a static Go binary starts in single-digit milliseconds with nothing to install alongside it.</p>
+        <p>huh earns its place in exactly one command. <code>scribe init</code> is the entire onboarding and should feel considered: pick your agent, pick your model, confirm the path, watch the replay, see what it wrote before it touches the repo. Everything else is plain stdout — status, diff and doctor are output, not interaction.</p>
+        <p class="lede">Not OpenTUI, for now. It's good, and it's what opencode itself runs on — but it's a full-screen rendering engine, and scribe is seven commands and one form. Adopting it means taking Bun and TypeScript onto the hook path to get a wizard huh does in forty lines. Where it would earn its place: <code>scribe browse</code>, a reader for journals and digests — scroll entries, jump by date, search for the bug you know you hit before. That's a real TUI and deserves a real TUI library. Not in these phases; the docs have to be worth reading first.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-num">05</div>
+      <h2>Phases</h2>
+    </div>
+    <div class="sec-body">
+      <div class="spacer"></div>
+      <div class="col phases">
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">00</div>
+            <div class="phase-cost">half day</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">Prove it before building it</div>
+            <div class="phase-goal">Three unknowns, all cheap to settle, all fatal if wrong.</div>
+            <ul class="tasks">
+              <li>Confirm the Stop hook actually fires here and hands over session id, transcript path and cwd</li>
+              <li>Confirm <code>opencode run --auto</code> completes unattended with no terminal attached</li>
+              <li>Feed this session's own transcript to two or three candidate models and compare against what really happened — we both know the right answer for this one, which makes it a real test</li>
+            </ul>
+            <div class="gate"><b>Gate</b>If no model writes prose you'd actually keep, stop here. Everything downstream is plumbing around that one capability.</div>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">01</div>
+            <div class="phase-cost">1–2 days</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">The loop, one repo, one person</div>
+            <div class="phase-goal">End to end and genuinely working, with nothing configurable yet.</div>
+            <ul class="tasks">
+              <li><code>scribe hook</code> — reads the hook payload on stdin, enqueues, exits. Budget under 50 ms, no network, never blocks your session</li>
+              <li>Queue, per-repo lock, pending flag, coalescing</li>
+              <li><code>scribe run</code> — the worker: new bytes in, four docs read, opencode called, docs edited</li>
+              <li>Byte offset per session so re-runs don't duplicate and resumed sessions pick up where they left off</li>
+              <li>Single Go binary. The hook path has to be instant and dependency-free</li>
+            </ul>
+            <div class="gate"><b>Done when</b>You work for an hour, touch nothing, and the four docs are current and correct afterwards.</div>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">02</div>
+            <div class="phase-cost">1–2 days</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">scribe init — turning it on for a repo</div>
+            <div class="phase-goal">The onboarding story, and the thing that makes the docs useful on day one instead of week three. Built before prompt tuning because it produces the corpus that tuning needs.</div>
+            <ul class="tasks">
+              <li>Seed pass: read the README, package files, directory tree and any existing docs to write a first PROJECT.md and DECISIONS.md</li>
+              <li>Replay pass: work through that repo's existing transcripts into CHANGELOG and JOURNAL</li>
+              <li>Chunked and resumable — some session histories are large</li>
+              <li>Dry run by default, writing somewhere you can read before it touches the repo</li>
+              <li>Uses the good model. It runs once per repo, so it's the wrong place to economise</li>
+            </ul>
+            <div class="gate"><b>Falls out of this</b>A real corpus of varied output to tune against in phase 03, instead of waiting around for live sessions to happen.</div>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">03</div>
+            <div class="phase-cost">2–3 days</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">Make the writing good</div>
+            <div class="phase-goal">The longest phase, and the one that decides whether you keep using this.</div>
+            <ul class="tasks">
+              <li>A separate prompt per doc — four small jobs beat one big one</li>
+              <li>PROJECT and DECISIONS gated behind "did anything product-level actually happen"</li>
+              <li>The correction path: pulling an entry always writes the reason into DECISIONS</li>
+              <li>Teach the journal what's worth capturing — problems hit, AI mistakes, dead ends, the actual fix</li>
+              <li>Tune how hard it checks the code before believing the transcript</li>
+              <li>Size caps on the edited docs, so the model can hold one whole and edit it safely</li>
+              <li>Iterate against the phase 02 corpus until output stops embarrassing you</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">04</div>
+            <div class="phase-cost">1 day</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">Config and safety</div>
+            <div class="phase-goal">Before it runs on anything that matters.</div>
+            <ul class="tasks">
+              <li>Off by default, opt in per repo — no surprise files appearing anywhere you didn't ask</li>
+              <li>Config: model, code-reading weight, ignore rules</li>
+              <li>Redaction pass before anything leaves the machine. Transcripts contain whatever was on screen, keys included</li>
+              <li><code>scribe status</code> and <code>scribe diff</code> — a silent background writer you can't inspect is a background writer you won't trust</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">05</div>
+            <div class="phase-cost">1 day</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">Digest and index</div>
+            <div class="phase-goal">Makes the history navigable instead of just long.</div>
+            <ul class="tasks">
+              <li>Weekly digest, grouped features / bugs / general work, sessions listed under each</li>
+              <li>Session index — one line each, dated, skimmable</li>
+              <li>No scheduler: the first run of a new week notices and writes last week's digest. Nothing to install, nothing to keep alive</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">06</div>
+            <div class="phase-cost">1–2 days</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">Teammates</div>
+            <div class="phase-goal">Blocked on a layout decision — see open questions below.</div>
+            <ul class="tasks">
+              <li>Pick the file layout, then build to it</li>
+              <li>Attribution on entries</li>
+              <li>Behaviour when two people's docs land in the same commit</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="phase">
+          <div class="phase-rail">
+            <div class="phase-id">07</div>
+            <div class="phase-cost">half day</div>
+          </div>
+          <div class="phase-main">
+            <div class="phase-name">The CLAUDE.md skill</div>
+            <div class="phase-goal">Reads the four docs, writes something small and sharp. Your model, on demand.</div>
+            <ul class="tasks">
+              <li>Slash command in Claude Code</li>
+              <li>Hard length ceiling — the value is in it being short</li>
+              <li>Shows the diff before it writes</li>
+            </ul>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-num">06</div>
+      <h2>Open</h2>
+    </div>
+    <div class="sec-body">
+      <div class="spacer"></div>
+      <div class="col">
+
+        <div class="open-q">
+          <div class="open-q-title">How teammates write to the same journal</div>
+          <p class="lede">Committed docs mean everyone's scribe appends to the same files — a merge conflict in machine-written markdown on nearly every pull. Blocks phase 06.</p>
+          <div class="opts">
+            <div class="opt">
+              <div class="opt-k">A</div>
+              <div>
+                <span class="opt-name">One file per session.</span>
+                <span class="opt-note"> <code>journal/2026-08-08-auth-refactor.md</code> plus a generated index. Two people can't touch the same file, so conflicts are impossible by construction. Also fixes the long-file readability problem. Costs you a directory of many small files.</span>
+              </div>
+            </div>
+            <div class="opt">
+              <div class="opt-k">B</div>
+              <div>
+                <span class="opt-name">One file per person.</span>
+                <span class="opt-note"> <code>journal/sahil.md</code>. No conflicts, fewer files, but each one grows without limit and reading across people means opening several.</span>
+              </div>
+            </div>
+            <div class="opt">
+              <div class="opt-k">C</div>
+              <div>
+                <span class="opt-name">Shared files, live with conflicts.</span>
+                <span class="opt-note"> Simplest layout, and the one you'll resent. Auto-generated conflict markers are the worst kind to resolve.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="minor">
+          <div><b>What it's called</b> — <code>scribe</code> is a working name and it's already baked into the docs folder path, so worth settling before phase 02.</div>
+          <div><b>Default writing model</b> — settle after phase 00 tells us which ones can actually do the job.</div>
+          <div><b>Journal splitting</b> — one file forever, or per month. Answered for free if the team question lands on A.</div>
+          <div><b>Committed or ignored</b> — gitignore for the first week regardless, until the output earns its way in. Note this sits awkwardly with git being the only undo.</div>
+          <div><b>Monorepos</b> — one <code>docs/scribe/</code> per repo assumes one product per repo. Fine for now; revisit if it bites.</div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-num">07</div>
+      <h2>What could sink it</h2>
+    </div>
+    <div class="sec-body">
+      <div class="spacer"></div>
+      <div class="col">
+
+        <div class="risk">
+          <div class="risk-mark">!</div>
+          <div>
+            <div class="risk-head">The writing model isn't good enough</div>
+            <div class="risk-body">Pulling what mattered out of a long messy conversation is the hard version of this task, not the easy one. There's no clever architecture that saves you here. Phase 00 exists to find this out in half a day instead of a week.</div>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risk-mark">!</div>
+          <div>
+            <div class="risk-head">The transcript format is undocumented</div>
+            <div class="risk-body">It's an internal file that can change between CLI versions. Two traps confirmed already: tool results are recorded as user messages, and subagent turns are mixed in and have to be filtered. Pin the parser to known shapes and fail loudly rather than writing nonsense quietly.</div>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risk-mark">!</div>
+          <div>
+            <div class="risk-head">The undo has a hole in it, by choice</div>
+            <div class="risk-body">Git is the recovery path, but nothing commits the docs — so the floor only exists as far back as you last committed. An afternoon of bad runs on an uncommitted PROJECT.md has nothing to restore from, and neither do repos that aren't git repos. Accepted deliberately to keep the tool out of your history. Worth revisiting if it actually bites; committing the docs yourself at the end of a session closes most of it.</div>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risk-mark">!</div>
+          <div>
+            <div class="risk-head">Nobody reads it</div>
+            <div class="risk-body">The stated goal is that mistakes don't repeat. That only pays off if the journal stays readable — which is what the index and the digest are for, and why the edited docs are size-capped.</div>
+          </div>
+        </div>
+
+        <div class="risk">
+          <div class="risk-mark">!</div>
+          <div>
+            <div class="risk-head">It ships your session contents somewhere</div>
+            <div class="risk-body">Transcripts hold whatever was on screen. A hosted free model means all of that goes to whoever runs it. Redaction plus per-repo opt-in in phase 03, before this points at anything real.</div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <footer>Draft 2 · ten decisions locked · name and team layout still open</footer>
+
+</div>

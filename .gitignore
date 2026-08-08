@@ -1,0 +1,12 @@
+# Go
+/bin/
+/dist/
+*.test
+*.out
+
+# scribe local state
+.scribe/
+docs/scribe/
+
+# OS / editor
+.DS_Store
