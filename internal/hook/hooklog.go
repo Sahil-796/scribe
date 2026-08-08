@@ -99,6 +99,17 @@ func logFailure(repoRoot string, entry FailureEntry) {
 	_ = os.Rename(tmp, path)
 }
 
+// LogFailure records a hook-path failure that happens outside Run — today
+// that means cmd/scribe/hook.go failing to spawn the background worker after
+// a successful enqueue (OPEN-ITEMS item 23). Such a failure is invisible
+// otherwise: the trigger is safely queued and the hook correctly exits 0, so
+// nothing anywhere says the work was never started, and docs quietly stop
+// updating. That's the same failure shape item 11 exists to close.
+//
+// It is the exported face of logFailure and inherits its guarantee: it never
+// returns an error, never panics, and can never change a caller's exit code.
+func LogFailure(repoRoot string, entry FailureEntry) { logFailure(repoRoot, entry) }
+
 // splitNonEmptyLines splits b on newlines and drops blank lines, so a
 // trailing newline (which every write here produces) doesn't turn into a
 // spurious empty entry on the next read-modify-write.

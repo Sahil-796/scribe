@@ -146,7 +146,7 @@ func Ask(o Options) (Answers, error) {
 		huh.NewGroup(
 			huh.NewNote().
 				Title("scribe init").
-				Description(fmt.Sprintf("Setting up %s for %s.", docsDir, o.RepoRoot)),
+				Description(fmt.Sprintf("Setting up %s in %s.\nThe four docs stay current after every reply.", docsDir, o.RepoRoot)),
 		),
 		huh.NewGroup(
 			huh.NewSelect[string]().
@@ -159,11 +159,11 @@ func Ask(o Options) (Answers, error) {
 				Description("Passed through to the connector, e.g. \""+DefaultModel+"\".").
 				Value(&model).
 				Validate(huh.ValidateNotEmpty()),
-			huh.NewInput().
-				Title("Docs directory").
-				Description("Where the four docs live, relative to the repo root.").
-				Value(&docsDir).
-				Validate(huh.ValidateNotEmpty()),
+			// No "docs directory" field: the path is fixed by decision 9
+			// (scribe.DocsDir — fixed name, nothing to detect, no collision
+			// with docs you already keep), and internal/docs hardcodes it
+			// regardless of what's configured. Asking would imply a choice
+			// that doesn't exist. The note above states the path instead.
 		),
 		huh.NewGroup(
 			huh.NewConfirm().

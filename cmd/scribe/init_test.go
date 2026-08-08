@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Sahil-796/scribe/internal/install"
@@ -216,3 +219,190 @@ func TestInit_DryRun_ThenApply_IsResumableAndDoesNotDoubleCallWriter(t *testing.
 		t.Fatalf("expected PROJECT.md after the apply run: %v", err)
 	}
 }
+
+// TestInit_Apply_ReportsOnlyDocsItActuallyWrote pins the fix for init
+// claiming it wrote all four docs when a repo with no past sessions can
+// only ever get two: PROJECT and DECISIONS. Reporting CHANGELOG/JOURNAL
+// sends the operator looking for files that were never created.
+func TestInit_Apply_ReportsOnlyDocsItActuallyWrote(t *testing.T) {
+	withFakeWriter(t, fakeSeedOutput)
+	dir := newTestRepo(t)
+
+	stdout, _, err := runInitCmd(t, dir, "--yes", "--apply")
+	if err != nil {
+		t.Fatalf("init --yes --apply failed: %v\nstdout: %s", err, stdout)
+	}
+
+	for _, doc := range []scribe.Doc{scribe.DocChangelog, scribe.DocJournal} {
+		path := filepath.Join(dir, "docs", "scribe", string(doc))
+		if _, statErr := os.Stat(path); statErr == nil {
+			t.Fatalf("%s exists, so this test can no longer prove anything", doc)
+		}
+		if strings.Contains(stdout, "Wrote") && strings.Contains(wroteLine(stdout), string(doc)) {
+			t.Errorf("init reported writing %s but never created it:\n%s", doc, stdout)
+		}
+	}
+	if !strings.Contains(wroteLine(stdout), string(scribe.DocProject)) {
+		t.Errorf("init did not report writing PROJECT.md:\n%s", stdout)
+	}
+}
+
+// wroteLine returns the "Wrote docs/scribe/{...}" line from init's output.
+func wroteLine(stdout string) string {
+	for _, l := range strings.Split(stdout, "\n") {
+		if strings.HasPrefix(l, "Wrote ") {
+			return l
+		}
+	}
+	return ""
+}
+
+// TestInit_Apply_AddsGitignoreEntries covers OPEN-ITEMS item 19: an
+// onboarded repo used to get no ignore entries at all, so scribe's own
+// local state and docs showed up as untracked clutter in the user's repo.
+func TestInit_Apply_AddsGitignoreEntries(t *testing.T) {
+	withFakeWriter(t, fakeSeedOutput)
+	dir := newTestRepo(t)
+
+	if _, _, err := runInitCmd(t, dir, "--yes", "--apply"); err != nil {
+		t.Fatalf("init --yes --apply failed: %v", err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("expected init to create .gitignore: %v", err)
+	}
+	for _, want := range []string{scribe.StateDir + "/", scribe.DocsDir + "/"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf(".gitignore missing %q:\n%s", want, b)
+		}
+	}
+}
+
+// TestInit_Apply_PreservesExistingGitignore makes sure onboarding appends
+// to a repo's ignore rules rather than replacing them, and doesn't
+// duplicate an entry the repo already has.
+func TestInit_Apply_PreservesExistingGitignore(t *testing.T) {
+	withFakeWriter(t, fakeSeedOutput)
+	dir := newTestRepo(t)
+
+	existing := "node_modules/\n" + scribe.StateDir + "/\n"
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(existing), 0o644); err != nil {
+		t.Fatalf("seeding .gitignore: %v", err)
+	}
+
+	if _, _, err := runInitCmd(t, dir, "--yes", "--apply"); err != nil {
+		t.Fatalf("init --yes --apply failed: %v", err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("reading .gitignore: %v", err)
+	}
+	got := string(b)
+	if !strings.Contains(got, "node_modules/") {
+		t.Errorf("init clobbered an existing .gitignore entry:\n%s", got)
+	}
+	if n := strings.Count(got, scribe.StateDir+"/"); n != 1 {
+		t.Errorf("%s/ appears %d times, want 1 (already present, must not duplicate):\n%s", scribe.StateDir, n, got)
+	}
+	if !strings.Contains(got, scribe.DocsDir+"/") {
+		t.Errorf(".gitignore missing the entry init should have added:\n%s", got)
+	}
+}
+
+// TestInit_ReplayResumesAfterAFailedChunk covers OPEN-ITEMS item 16: the
+// replay pass's chunk-level resume was only ever tested inside
+// internal/replay, never through `scribe init`. Temp repos have no
+// ~/.claude/projects history, so this plants a synthetic one (HOME
+// redirected, never the user's real history) and fails the writer partway
+// so the second run has something to resume from.
+func TestInit_ReplayResumesAfterAFailedChunk(t *testing.T) {
+	dir := newTestRepo(t)
+	plantTranscript(t, dir, 4)
+
+	// Fail every replay chunk on the first run, so nothing is checkpointed
+	// as complete and the second run must redo it.
+	var calls int
+	failReplay := true
+	newWriterOrig := newWriter
+	t.Cleanup(func() { newWriter = newWriterOrig })
+	newWriter = func(_ writer.Config) (scribe.Writer, error) {
+		return writerFunc(func(prompt string) (string, error) {
+			calls++
+			if strings.Contains(prompt, "PROJECT.md") {
+				return fakeSeedOutput, nil // the seed pass
+			}
+			if failReplay {
+				return "", errors.New("simulated writer failure")
+			}
+			return `{"CHANGELOG.md":"- replayed entry\n"}`, nil
+		}), nil
+	}
+
+	if _, _, err := runInitCmd(t, dir, "--yes"); err != nil {
+		t.Fatalf("first init failed unexpectedly: %v", err)
+	}
+	firstRunCalls := calls
+	// Guard against a vacuous pass: if the planted transcript never turned
+	// into replay chunks, every assertion below would hold trivially.
+	if firstRunCalls < 2 {
+		t.Fatalf("first run made %d writer call(s) — the planted transcript produced no replay chunks, so this test proves nothing", firstRunCalls)
+	}
+
+	// Second run: the writer now succeeds. Chunks that failed before were
+	// never marked complete, so they must be retried rather than skipped.
+	failReplay = false
+	calls = 0
+	if _, _, err := runInitCmd(t, dir, "--yes"); err != nil {
+		t.Fatalf("second init failed: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("second run made no writer calls — failed chunks were wrongly treated as complete")
+	}
+
+	// Third run: everything succeeded last time, so every replay chunk is
+	// checkpointed and must be skipped. Only the seed pass should call the
+	// writer again.
+	calls = 0
+	if _, _, err := runInitCmd(t, dir, "--yes"); err != nil {
+		t.Fatalf("third init failed: %v", err)
+	}
+	if calls >= firstRunCalls {
+		t.Errorf("third run made %d writer calls, want fewer than the first run's %d — completed chunks were not skipped", calls, firstRunCalls)
+	}
+}
+
+// plantTranscript writes a synthetic transcript for repoRoot into a
+// redirected HOME, so replay.FindSessions finds it. It never reads or
+// writes the user's real ~/.claude/projects.
+func plantTranscript(t *testing.T, repoRoot string, entries int) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	abs, err := filepath.Abs(repoRoot)
+	if err != nil {
+		t.Fatalf("resolving repo root: %v", err)
+	}
+	mangled := strings.NewReplacer("/", "-", ".", "-").Replace(abs)
+	dir := filepath.Join(home, ".claude", "projects", mangled)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating fake transcript dir: %v", err)
+	}
+
+	var b strings.Builder
+	for i := 0; i < entries; i++ {
+		fmt.Fprintf(&b, `{"type":"user","timestamp":"2026-08-08T10:0%d:00Z","message":{"role":"user","content":[{"type":"text","text":"synthetic prompt %d"}]}}`+"\n", i, i)
+		fmt.Fprintf(&b, `{"type":"assistant","timestamp":"2026-08-08T10:0%d:30Z","message":{"role":"assistant","model":"m","content":[{"type":"text","text":"synthetic reply %d"}]}}`+"\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sess.jsonl"), []byte(b.String()), 0o644); err != nil {
+		t.Fatalf("writing fake transcript: %v", err)
+	}
+}
+
+// writerFunc adapts a plain function to scribe.Writer.
+type writerFunc func(string) (string, error)
+
+func (f writerFunc) Name() string                      { return "fake" }
+func (f writerFunc) Run(prompt string) (string, error) { return f(prompt) }

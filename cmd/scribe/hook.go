@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -71,29 +73,31 @@ func enqueueAndSpawn(repoRoot string, t scribe.Trigger) error {
 	if err := queue.Enqueue(repoRoot, t); err != nil {
 		return err
 	}
-	spawnRun(repoRoot)
+	if err := spawnRun(repoRoot); err != nil {
+		// Recorded, not returned: the enqueue succeeded, so the hook must
+		// still report success. But a spawn that never starts means the
+		// docs quietly stop updating, which is exactly what the failure
+		// log exists to make visible.
+		hook.LogFailure(repoRoot, hook.FailureEntry{
+			Time:      time.Now().UTC(),
+			SessionID: t.SessionID,
+			Reason:    fmt.Sprintf("enqueued, but spawning the background worker failed: %v", err),
+		})
+	}
 	return nil
 }
 
 // spawnRun starts a detached, background "scribe run" for repoRoot and
-// returns immediately without waiting on it. It never returns an error:
-// every failure mode (binary not resolvable, exec fails to start) is
-// best-effort and silently swallowed, per the hook's one hard rule — it
-// must never change behavior the caller depends on. The trigger this run
-// would have picked up is already enqueued regardless of whether spawning
-// here succeeds; the next hook invocation (or a human running "scribe run")
-// will still find and drain it.
-//
-// Logging a spawn failure would be nice for `scribe doctor`, but
-// internal/hook's existing failure log (hooklog.go's logFailure) is
-// unexported and internal/hook/ is outside this change's file allowlist —
-// reusing it isn't possible from here, and inventing a second log file
-// just for this one failure mode is the "second mechanism" the task
-// explicitly says not to add. So a spawn failure is silent by design, not
-// by oversight.
-func spawnRun(repoRoot string) {
+// returns immediately without waiting on it. It returns whatever stopped it
+// from starting the child so the caller can record it — but the caller must
+// not turn that into a non-zero exit, per the hook's one hard rule: it must
+// never change behavior the caller depends on. The trigger this run would
+// have picked up is already enqueued regardless of whether spawning here
+// succeeds; the next hook invocation (or a human running "scribe run") will
+// still find and drain it.
+func spawnRun(repoRoot string) error {
 	if os.Getenv(noSpawnEnvVar) == "1" {
-		return
+		return nil
 	}
 
 	bin := os.Getenv(spawnBinEnvVar)
@@ -104,7 +108,7 @@ func spawnRun(repoRoot string) {
 		// installed into.
 		resolved, err := os.Executable()
 		if err != nil {
-			return
+			return fmt.Errorf("locating the scribe binary: %w", err)
 		}
 		bin = resolved
 	}
@@ -135,5 +139,8 @@ func spawnRun(repoRoot string) {
 	// this function returns, at which point the child (already
 	// detached) is reparented by the OS rather than left as a zombie
 	// under a long-lived parent.
-	_ = cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting %s run: %w", bin, err)
+	}
+	return nil
 }

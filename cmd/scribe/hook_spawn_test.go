@@ -6,9 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/hook"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -156,6 +158,20 @@ func TestHookSpawnFailureDoesNotBreakHook(t *testing.T) {
 	}
 	if n := queueLineCount(t, repo); n != 1 {
 		t.Fatalf("queue.jsonl has %d trigger(s), want exactly 1 (spawn failure must not lose the trigger)", n)
+	}
+
+	// OPEN-ITEMS item 23: the failure must leave a trace. A spawn that never
+	// starts means the docs quietly stop updating, and the hook's own exit
+	// code can't say so — it is required to stay 0 here.
+	failures, err := hook.RecentFailures(repo)
+	if err != nil {
+		t.Fatalf("reading hook failure log: %v", err)
+	}
+	if len(failures) != 1 {
+		t.Fatalf("hook failure log has %d entries, want 1 (a silent spawn failure is invisible)", len(failures))
+	}
+	if !strings.Contains(failures[0].Reason, "spawning") {
+		t.Errorf("logged reason doesn't mention the spawn: %q", failures[0].Reason)
 	}
 }
 
