@@ -218,11 +218,15 @@ func (s *Store) WriteState(doc scribe.Doc, content string) error {
 	return nil
 }
 
-// AppendHistory adds entry to the end of doc, seeding the doc first if it
-// doesn't exist. Only valid for CHANGELOG.md and JOURNAL.md. The write is
-// still atomic — the whole file (old content + entry) is written to a temp
-// file and renamed into place — so a crash mid-append can only leave the
-// old content intact or the new content in full, never a torn file.
+// AppendHistory adds entry to the end of doc as one block, seeding the doc
+// first if it doesn't exist. Only valid for CHANGELOG.md and JOURNAL.md.
+//
+// If the doc would exceed its size cap after the append, the oldest entries
+// are rotated out to an archive file first (see rotateHistory) — never the
+// entry just being added, and never a partial entry. The live doc write is
+// still atomic — the whole file is written to a temp file and renamed into
+// place — so a crash mid-append can only leave the old content intact or
+// the new content in full, never a torn file.
 func (s *Store) AppendHistory(doc scribe.Doc, entry string) error {
 	if !historyDocs[doc] {
 		return fmt.Errorf("docs: AppendHistory called on %s, which is a current-state doc — use WriteState", doc)
@@ -232,13 +236,15 @@ func (s *Store) AppendHistory(doc scribe.Doc, entry string) error {
 		return err
 	}
 
-	sep := ""
-	if cur != "" && !strings.HasSuffix(cur, "\n") {
-		sep = "\n"
-	}
-	entry = strings.TrimRight(entry, "\n") + "\n"
+	title, blocks := parseHistoryDoc(cur)
+	blocks = append(blocks, strings.TrimRight(entry, "\n"))
 
-	if err := atomicWrite(s.Path(doc), []byte(cur+sep+entry)); err != nil {
+	blocks, err = s.rotateHistory(doc, title, blocks)
+	if err != nil {
+		return fmt.Errorf("docs: rotate %s: %w", doc, err)
+	}
+
+	if err := atomicWrite(s.Path(doc), []byte(serializeHistoryDoc(title, blocks))); err != nil {
 		return fmt.Errorf("docs: append %s: %w", doc, err)
 	}
 	return nil
