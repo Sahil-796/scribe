@@ -1,12 +1,14 @@
 // Package worker implements the run loop from docs/PLAN.md's "The loop"
 // diagram: take the per-repo lock, drain the queue, read new transcript
-// bytes, read the four docs, call the writer, apply whatever edits came
-// back, save offsets, release the lock, and re-run if a trigger landed
-// while we were busy.
+// bytes, read the four docs, call the writer once per doc, apply whatever
+// edits came back, save offsets, release the lock, and re-run if a trigger
+// landed while we were busy.
 //
-// Phase 01 ("one repo, one person, nothing configurable yet") hardcodes
-// what would later be config — one prompt, no per-doc weighting, no
-// redaction. That's deliberate; see docs/PLAN.md phases 01 vs 03/04.
+// Phase 01 ("one repo, one person, nothing configurable yet") hardcoded one
+// combined prompt covering all four docs. Phase 03 ("make the writing
+// good") replaces that with a focused prompt per doc (see prompt.go) — each
+// doc gets its own call, its own guidance, and only its own current
+// content, rather than one prompt trying to do four jobs at once.
 //
 // This package depends on two sibling packages by contract, not by import:
 // internal/queue (unit 1B) and internal/transcript (unit 1C) were still
@@ -117,7 +119,7 @@ func Run(deps Deps) error {
 }
 
 // runOnce drains whatever is currently queued, reads the new transcript
-// bytes, calls the writer once, and applies whatever it produced.
+// bytes, calls the writer once per doc, and applies whatever it produced.
 //
 // Offset ordering: LoadOffset/ReadTranscript happen up front (read-only,
 // safe to redo), but SaveOffset only happens at the very end, after
@@ -154,11 +156,6 @@ func runOnce(deps Deps) error {
 	}
 
 	var allEntries []scribe.Entry
-	type pendingOffset struct {
-		repoRoot  string
-		sessionID string
-		bytes     int64
-	}
 	var offsetsToSave []pendingOffset
 
 	for _, sessionID := range order {
@@ -196,19 +193,20 @@ func runOnce(deps Deps) error {
 		return fmt.Errorf("worker: read docs: %w", err)
 	}
 
-	prompt := buildPrompt(current, allEntries)
-
-	out, err := deps.Writer.Run(prompt)
+	docEdits, err := collectEdits(deps, current, allEntries)
 	if err != nil {
-		return fmt.Errorf("worker: writer run: %w", err)
+		return err
 	}
 
-	edits, err := parseEdits(out)
-	if err != nil {
-		return fmt.Errorf("worker: parse writer output: %w", err)
+	// A genuinely quiet run — every per-doc call came back NO_CHANGE — is
+	// expected, not suspicious: each doc call is allowed to decline on its
+	// own. Nothing to apply, nothing to verify; the offset still advances
+	// below so this slice of transcript isn't re-read next run.
+	if len(docEdits) == 0 {
+		return saveOffsets(deps, offsetsToSave)
 	}
 
-	if err := applyEdits(deps.Docs, edits); err != nil {
+	if err := applyEdits(deps.Docs, docEdits); err != nil {
 		return fmt.Errorf("worker: apply edits: %w", err)
 	}
 
@@ -216,27 +214,43 @@ func runOnce(deps Deps) error {
 	// above. This is the fail-open guard from docs/findings/OPEN-ITEMS.md
 	// item 8 / docs/findings/00-writer.md: `opencode run` without `--auto`
 	// auto-rejects every edit the model attempts and still exits 0 with
-	// normal-looking JSON, so "the writer returned success" is not evidence
-	// that anything was written. We got this far because allEntries was
-	// non-empty (there was genuinely something to write about — the
-	// legitimate "nothing new happened" case already returned above, before
-	// the writer was ever called), so if the docs are still identical after
-	// applying whatever the writer sent back, that's not a quiet no-op, it's
-	// the writer silently swallowing an edit. Treat it as a failure and,
-	// per the ordering rule above, do not save any offset — the next run
-	// will retry the same transcript bytes instead of losing them.
+	// normal-looking output, so "the writer returned success" is not
+	// evidence that anything was written. We got this far with a non-empty
+	// docEdits — at least one doc call returned real content, not
+	// noChangeSentinel — so if the docs are still identical after applying
+	// it, that's not a quiet no-op (that case returned above, before ever
+	// reaching here), it's the writer echoing back content that changes
+	// nothing. Treat it as a failure and, per the ordering rule above, do
+	// not save any offset — the next run will retry the same transcript
+	// bytes instead of losing them.
 	after, err := deps.Docs.ReadAll()
 	if err != nil {
 		return fmt.Errorf("worker: read docs after apply: %w", err)
 	}
 	if docsUnchanged(current, after) {
-		return fmt.Errorf("worker: writer %q exited successfully but changed no docs (likely a silent auto-reject — see docs/findings/00-writer.md; forgetting the writer's auto-approve flag makes opencode run reject every edit and still exit 0)", deps.Writer.Name())
+		return fmt.Errorf("worker: writer %q claimed a change but the docs are unchanged after applying it (likely a silent auto-reject — see docs/findings/00-writer.md; forgetting the writer's auto-approve flag makes opencode run reject every edit and still exit 0)", deps.Writer.Name())
 	}
 
 	// Only now, after every doc write above has succeeded and actually
-	// changed something, do offsets move.
-	// See the ordering comment above the function.
-	for _, po := range offsetsToSave {
+	// changed something, do offsets move. See the ordering comment above
+	// the function.
+	return saveOffsets(deps, offsetsToSave)
+}
+
+// pendingOffset is one session's new read position, queued up during the
+// drain loop in runOnce and only actually persisted once every doc write
+// for this run has succeeded (or there was legitimately nothing to write).
+type pendingOffset struct {
+	repoRoot  string
+	sessionID string
+	bytes     int64
+}
+
+// saveOffsets persists every queued offset. Factored out of runOnce so both
+// the "wrote something" path and the "everything came back NO_CHANGE" path
+// advance offsets the same way, from the same single call site per run.
+func saveOffsets(deps Deps, offsets []pendingOffset) error {
+	for _, po := range offsets {
 		if err := deps.SaveOffset(po.repoRoot, scribe.Offset{
 			SessionID: po.sessionID,
 			Bytes:     po.bytes,
@@ -245,7 +259,6 @@ func runOnce(deps Deps) error {
 			return fmt.Errorf("worker: save offset for session %s: %w", po.sessionID, err)
 		}
 	}
-
 	return nil
 }
 
@@ -269,3 +282,41 @@ func docsUnchanged(before, after map[scribe.Doc]string) bool {
 
 // compile-time check that *docs.Store satisfies DocStore.
 var _ DocStore = (*docs.Store)(nil)
+
+// docOrder is CHANGELOG/JOURNAL first, then PROJECT/DECISIONS — most
+// sessions only ever need the first pair (docs/PLAN.md, "The four docs"),
+// so that's the group every run pays for; the second pair is the
+// less-common, more-expensive one.
+var docOrder = []scribe.Doc{scribe.DocChangelog, scribe.DocJournal, scribe.DocProject, scribe.DocDecisions}
+
+// collectEdits runs one focused writer call per doc (phase 03 item 1: a
+// separate prompt per doc) and returns whatever changes came back.
+func collectEdits(deps Deps, current map[scribe.Doc]string, entries []scribe.Entry) (edits, error) {
+	result := make(edits)
+
+	for _, d := range docOrder {
+		if err := runDocWriter(deps, d, current, entries, result); err != nil {
+			return nil, err
+		}
+	}
+
+	return result, nil
+}
+
+// runDocWriter makes one writer call for doc d and, if it came back with a
+// real change (not noChangeSentinel), records it into result.
+func runDocWriter(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entries []scribe.Entry, result edits) error {
+	prompt := buildDocPrompt(d, current[d], entries)
+	out, err := deps.Writer.Run(prompt)
+	if err != nil {
+		return fmt.Errorf("worker: writer run for %s: %w", d, err)
+	}
+	content, changed, err := parseDocOutput(out)
+	if err != nil {
+		return fmt.Errorf("worker: parse writer output for %s: %w", d, err)
+	}
+	if changed {
+		result[d] = content
+	}
+	return nil
+}
