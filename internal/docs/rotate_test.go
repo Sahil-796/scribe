@@ -218,3 +218,37 @@ func mustRead(t *testing.T, s *Store, doc scribe.Doc) string {
 	}
 	return content
 }
+
+// The blocks being split apart here are markdown prose written by a
+// language model, so the separator has to be something such a model won't
+// emit. A `---` horizontal rule with blank lines around it — the obvious
+// choice, and what this originally used — is completely ordinary in
+// generated markdown, which would make entries silently split in half.
+func TestAppendHistoryEntryContainingHorizontalRuleStaysOneEntry(t *testing.T) {
+	s := mustOpen(t)
+
+	entry := "## What happened\n\nFirst part.\n\n---\n\nSecond part, same entry."
+	if err := s.AppendHistory(scribe.DocChangelog, entry); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	_, blocks := parseHistoryDoc(mustRead(t, s, scribe.DocChangelog))
+	if len(blocks) != 1 {
+		t.Fatalf("an entry containing a --- rule was split into %d blocks: %q", len(blocks), blocks)
+	}
+	if blocks[0] != entry {
+		t.Fatalf("entry did not round-trip:\n got: %q\nwant: %q", blocks[0], entry)
+	}
+}
+
+// Rotation identifies pointer blocks by an invisible marker, not by their
+// visible prose. An entry that happens to open with an italic blockquote
+// must not be mistaken for one and made unrotatable.
+func TestEntryOpeningWithItalicBlockquoteIsNotAnArchivePointer(t *testing.T) {
+	if isArchivePointer("> _a quote the model chose to open with_") {
+		t.Fatal("a plain entry was misidentified as an archive pointer")
+	}
+	if !isArchivePointer(archivePointerText(3, "archive/CHANGELOG-2026-08.md")) {
+		t.Fatal("a real archive pointer was not recognised")
+	}
+}

@@ -10,8 +10,18 @@
 // Splitting on a literal separator instead of tracking entries out of band
 // keeps the on-disk file the only source of truth — no side index that
 // could drift from what's actually there — at the cost of assuming no
-// entry ever contains the exact sequence "\n\n---\n\n" itself; that's an
-// accepted, documented trade-off, not an oversight.
+// entry ever contains the separator itself.
+//
+// That assumption is why the separator is an HTML comment and not a `---`
+// horizontal rule. The content being split here is markdown prose written
+// by a language model, and a rule surrounded by blank lines is an entirely
+// ordinary thing for one to emit — a delimiter that common inside the
+// payload isn't a delimiter, it's a latent corruption. An HTML comment
+// carrying the tool's own name renders as nothing, survives markdown
+// tooling intact, and is not something a writer producing a changelog
+// entry will type by accident. The same reasoning applies to the archive
+// pointer marker below: identifying a block by its visible prose ("> _")
+// would misread any entry that happened to open with an italic blockquote.
 package docs
 
 import (
@@ -25,14 +35,18 @@ import (
 )
 
 // blockSep separates the title line from the first block, and each block
-// from the next, in a history doc's on-disk text. It renders as a markdown
-// horizontal rule with blank lines around it, so the file stays readable
-// (and diffable) as plain markdown, not just as scribe's internal format.
-const blockSep = "\n\n---\n\n"
+// from the next, in a history doc's on-disk text. It renders as nothing at
+// all, so the file still reads as plain markdown rather than as scribe's
+// internal format — see the package comment for why this is a comment and
+// not a `---` rule.
+const blockSep = "\n\n<!-- scribe:entry -->\n\n"
 
-// archivePointerPrefix marks a block as a rotation pointer rather than a
-// real entry — see archivePointerText and isArchivePointer.
-const archivePointerPrefix = "> _"
+// archivePointerMarker leads a block that is a rotation pointer rather
+// than a real entry — see archivePointerText and isArchivePointer. Like
+// blockSep it is invisible when rendered, so the pointer's visible text
+// stays plain prose while the machine-readable part can't be produced by
+// accident.
+const archivePointerMarker = "<!-- scribe:archived -->"
 
 // serializeHistoryDoc renders a history doc's title line plus its ordered
 // blocks back into on-disk text. It is parseHistoryDoc's inverse.
@@ -64,7 +78,7 @@ func parseHistoryDoc(content string) (title string, blocks []string) {
 // whatever got rotated out — so rotation must never treat one as an entry
 // it's free to remove.
 func isArchivePointer(block string) bool {
-	return strings.HasPrefix(block, archivePointerPrefix)
+	return strings.HasPrefix(block, archivePointerMarker)
 }
 
 // archivePointerText builds the pointer block left in the live doc after a
@@ -75,7 +89,7 @@ func archivePointerText(n int, relPath string) string {
 	if n != 1 {
 		noun = "entries"
 	}
-	return fmt.Sprintf("> _%d earlier %s archived to [%s](%s) to stay under the size cap._", n, noun, relPath, relPath)
+	return fmt.Sprintf("%s\n> _%d earlier %s archived to [%s](%s) to stay under the size cap._", archivePointerMarker, n, noun, relPath, relPath)
 }
 
 // archiveTitle is the header line a new archive file is seeded with.

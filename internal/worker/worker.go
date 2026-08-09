@@ -27,7 +27,9 @@
 package worker
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/Sahil-796/scribe/internal/docs"
@@ -98,6 +100,12 @@ type Deps struct {
 	// Zero value (empty string) behaves as CodeWeightCheck.
 	CodeWeight CodeWeight
 
+	// Log receives operational notes about a run that survived something
+	// worth knowing about — currently, per-doc calls that failed while
+	// others succeeded. Optional: nil discards. Not for tracing; a healthy
+	// run writes nothing here.
+	Log io.Writer
+
 	// Now is injectable for tests; defaults to time.Now.
 	Now func() time.Time
 }
@@ -116,6 +124,18 @@ func (d Deps) codeWeight() CodeWeight {
 		return CodeWeightCheck
 	}
 	return d.CodeWeight
+}
+
+// logf writes an operational note to Log, or discards it if the caller
+// didn't set one. Used for things a run survives but a human would want to
+// know about — a partial failure, most of all. Swallowing those silently is
+// the failure shape OPEN-ITEMS items 11 and 23 are about: the run keeps
+// working and nobody learns that half of it didn't.
+func (d Deps) logf(format string, args ...any) {
+	if d.Log == nil {
+		return
+	}
+	fmt.Fprintf(d.Log, format, args...)
 }
 
 // Run is the loop's entrypoint, called once per Stop-hook-triggered wakeup.
@@ -232,9 +252,17 @@ func runOnce(deps Deps) error {
 		return fmt.Errorf("worker: read docs: %w", err)
 	}
 
-	docEdits, err := collectEdits(deps, current, allEntries)
-	if err != nil {
-		return err
+	// A partial failure is not a failed run: collectEdits returns whatever
+	// docs came back good alongside the errors for the ones that didn't, and
+	// only reports a hard error when nothing survived. Losing a good
+	// CHANGELOG entry because the JOURNAL call flaked would mean redoing
+	// both next run.
+	docEdits, collectErr := collectEdits(deps, current, allEntries)
+	if len(docEdits) == 0 && collectErr != nil {
+		return collectErr
+	}
+	if collectErr != nil {
+		deps.logf("worker: continuing with partial results: %v\n", collectErr)
 	}
 
 	// A genuinely quiet run — every per-doc call came back NO_CHANGE — is
@@ -336,28 +364,46 @@ var projectAndDecisions = []scribe.Doc{scribe.DocProject, scribe.DocDecisions}
 // conversation actually contains product-level talk (phase 03 item 2) —
 // skipping the calls entirely is both cheaper and truer to that intent
 // than calling and discarding.
+//
+// A failed call for one doc does not discard the others. Phase 03 took a
+// run from one writer call to as many as four; aborting the run on the
+// first error would multiply the per-run failure rate by the number of
+// calls and throw away work that already succeeded, and the offset
+// wouldn't advance, so the next run would redo all of it. Errors are
+// collected and returned alongside whatever did succeed — the caller
+// applies the good edits and logs the rest.
 func collectEdits(deps Deps, current map[scribe.Doc]string, entries []scribe.Entry) (edits, error) {
 	result := make(edits)
+	var errs []error
 
 	for _, d := range changelogAndJournal {
 		if err := runDocWriter(deps, d, current, entries, result); err != nil {
-			return nil, err
+			errs = append(errs, err)
 		}
 	}
 
+	// A gate failure must never cost us the history edits above. The gate
+	// is an optimisation for two optional docs, so when it errors the
+	// honest fallback is "don't know" — skip PROJECT/DECISIONS, record why,
+	// and keep everything else.
 	gateIn, err := gateProductLevel(deps, entries)
 	if err != nil {
-		return nil, err
-	}
-	if gateIn {
+		errs = append(errs, err)
+	} else if gateIn {
 		for _, d := range projectAndDecisions {
 			if err := runDocWriter(deps, d, current, entries, result); err != nil {
-				return nil, err
+				errs = append(errs, err)
 			}
 		}
 	}
 
-	return result, nil
+	// Only a run that produced nothing at all is a failed run. If some doc
+	// came back good, the run did useful work and the offset should
+	// advance past this slice rather than replaying it forever.
+	if len(errs) > 0 && len(result) == 0 {
+		return nil, errors.Join(errs...)
+	}
+	return result, errors.Join(errs...)
 }
 
 // gateProductLevel decides whether PROJECT.md/DECISIONS.md are worth

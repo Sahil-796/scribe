@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -789,4 +791,103 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// A failed call for one doc must not discard the docs that succeeded.
+// Phase 03 took a run from one writer call to as many as four, so aborting
+// on the first error would both multiply the per-run failure rate and throw
+// away work — and because the offset wouldn't advance, the next run would
+// pay for all of it again.
+func TestPartialDocFailureKeepsTheDocsThatSucceeded(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	// CHANGELOG succeeds, JOURNAL fails. No gate keyword, so that's all.
+	w := &fakeWriter{
+		outputs: []string{"a real changelog entry", ""},
+		errs:    []error{nil, errors.New("journal call boom")},
+	}
+
+	var log bytes.Buffer
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w, Log: &log,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run should survive one failed doc call, got: %v", err)
+	}
+	if len(store.history[scribe.DocChangelog]) != 1 {
+		t.Fatalf("changelog entry was discarded because journal failed: %v", store.history[scribe.DocChangelog])
+	}
+	if got := tr.offsets["s1"]; got != 1 {
+		t.Fatalf("offset should advance when the run did real work, got %d", got)
+	}
+	if !strings.Contains(log.String(), "journal call boom") {
+		t.Fatalf("a partial failure must be visible, got log: %q", log.String())
+	}
+}
+
+// A gate failure is the worst version of the above: it happens *after*
+// CHANGELOG and JOURNAL are already in hand, and the gate only decides
+// whether to attempt two optional docs. Losing the history edits to it
+// would be strictly wrong.
+func TestGateFailureDoesNotDiscardHistoryEdits(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	// "decided" trips the keyword prefilter, so the gate call actually runs.
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "we decided to drop it"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{
+		outputs: []string{"changelog entry", "journal entry", ""},
+		errs:    []error{nil, nil, errors.New("gate boom")},
+	}
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run should survive a failed gate call, got: %v", err)
+	}
+	if len(store.history[scribe.DocChangelog]) != 1 || len(store.history[scribe.DocJournal]) != 1 {
+		t.Fatalf("gate failure discarded history edits: changelog=%v journal=%v",
+			store.history[scribe.DocChangelog], store.history[scribe.DocJournal])
+	}
+	if got := tr.offsets["s1"]; got != 1 {
+		t.Fatalf("offset should advance, got %d", got)
+	}
+}
+
+// When every call fails there is genuinely nothing to apply, and the
+// offset must stay put so the next run retries these transcript bytes.
+func TestAllDocCallsFailingIsStillAFailedRun(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{errs: []error{errors.New("boom one"), errors.New("boom two")}}
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err == nil {
+		t.Fatal("a run where every doc call failed must be an error")
+	}
+	if got, ok := tr.offsets["s1"]; ok && got != 0 {
+		t.Fatalf("offset must not advance when nothing succeeded, got %d", got)
+	}
 }
