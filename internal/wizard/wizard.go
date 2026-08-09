@@ -57,12 +57,47 @@ const (
 	DefaultModel = "opencode/longcat-2.0-free"
 )
 
+// GradedModels are the models phase 00's bakeoff actually ran against a real
+// transcript and ranked, offered as the model choice rather than a single
+// hardcoded default. Order is the bakeoff's ranking, best first, so the
+// pre-selected option is the recommended one without the choice being made
+// silently on the operator's behalf. See docs/findings/00-models.md.
+var GradedModels = []struct{ ID, Note string }{
+	{"opencode/longcat-2.0-free", "best of the three tested — reads like a human wrote it"},
+	{"opencode/mimo-v2.5-free", "strong second — clean and correctly scoped"},
+	{"opencode/deepseek-v4-flash-free", "right substance, visibly glitched prose"},
+}
+
+// ModelOther is the sentinel the model select uses for "none of these" — it
+// reveals a free-text field rather than limiting anyone to the three models
+// that happened to be graded once.
+const ModelOther = "other"
+
+// Layout is how a repo's docs are organised across the people working in it.
+// Asked at onboarding rather than decided globally: PLAN.md's phase 06 left
+// this open, and the answer is genuinely per-repo — a solo repo and a shared
+// one want different things.
+type Layout string
+
+const (
+	// LayoutPerSession gives each session its own file, aggregated by the
+	// digest. No write conflicts by construction.
+	LayoutPerSession Layout = "per-session"
+	// LayoutShared keeps the four docs as single shared files that everyone
+	// appends to. Simplest, but concurrent writes can conflict.
+	LayoutShared Layout = "shared"
+)
+
 // Answers is what the user chose.
 type Answers struct {
 	Agent   string
 	Model   string
 	DocsDir string
-	Proceed bool
+	// DocsInGit is whether the docs are committed to the repo or kept out of
+	// it via .gitignore. Asked rather than assumed (OPEN-ITEMS item 3).
+	DocsInGit bool
+	Layout    Layout
+	Proceed   bool
 }
 
 // Options seeds the form with defaults.
@@ -133,13 +168,31 @@ func Ask(o Options) (Answers, error) {
 	o = withDefaults(o)
 
 	agent := o.DefaultAgent
-	model := o.DefaultModel
 	docsDir := o.DocsDir
 	proceed := true
+	docsInGit := false
+	layout := LayoutPerSession
+
+	// modelChoice is the select's value; customModel is the free-text field
+	// behind ModelOther. They're resolved into one model at the end.
+	modelChoice := o.DefaultModel
+	customModel := ""
 
 	agentOptions := make([]huh.Option[string], 0, len(o.Agents))
 	for _, a := range o.Agents {
 		agentOptions = append(agentOptions, huh.NewOption(a, a))
+	}
+
+	modelOptions := make([]huh.Option[string], 0, len(GradedModels)+1)
+	for _, m := range GradedModels {
+		modelOptions = append(modelOptions, huh.NewOption(m.ID+" — "+m.Note, m.ID))
+	}
+	modelOptions = append(modelOptions, huh.NewOption("something else…", ModelOther))
+	if !isGradedModel(modelChoice) {
+		// A model passed via --model that isn't one of the graded three
+		// shouldn't silently reset the select to longcat.
+		customModel = modelChoice
+		modelChoice = ModelOther
 	}
 
 	form := huh.NewForm(
@@ -154,16 +207,39 @@ func Ask(o Options) (Answers, error) {
 				Description("Which connector runs the writer agent.").
 				Options(agentOptions...).
 				Value(&agent),
-			huh.NewInput().
+			huh.NewSelect[string]().
 				Title("Model").
-				Description("Passed through to the connector, e.g. \""+DefaultModel+"\".").
-				Value(&model).
-				Validate(huh.ValidateNotEmpty()),
+				Description("Ranked by phase 00's bakeoff on a real transcript.").
+				Options(modelOptions...).
+				Value(&modelChoice),
 			// No "docs directory" field: the path is fixed by decision 9
 			// (scribe.DocsDir — fixed name, nothing to detect, no collision
 			// with docs you already keep), and internal/docs hardcodes it
 			// regardless of what's configured. Asking would imply a choice
 			// that doesn't exist. The note above states the path instead.
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Model name").
+				Description("In provider/model form, e.g. \"opencode/longcat-2.0-free\".").
+				Value(&customModel).
+				Validate(huh.ValidateNotEmpty()),
+		).WithHideFunc(func() bool { return modelChoice != ModelOther }),
+		huh.NewGroup(
+			huh.NewSelect[Layout]().
+				Title("Docs layout").
+				Description("How these docs are organised when more than one person works here.").
+				Options(
+					huh.NewOption("One file per session — no write conflicts, digest aggregates them", LayoutPerSession),
+					huh.NewOption("Shared files — simplest, but concurrent writes can conflict", LayoutShared),
+				).
+				Value(&layout),
+			huh.NewConfirm().
+				Title("Commit the docs to git?").
+				Description("No keeps "+scribe.DocsDir+" out of the repo via .gitignore.").
+				Affirmative("Commit them").
+				Negative("Keep them out").
+				Value(&docsInGit),
 		),
 		huh.NewGroup(
 			huh.NewConfirm().
@@ -178,10 +254,36 @@ func Ask(o Options) (Answers, error) {
 		if errors.Is(err, huh.ErrUserAborted) {
 			// Ctrl+C / Esc: not an error, just "the user backed out".
 			// Report whatever was chosen so far but with Proceed false.
-			return Answers{Agent: agent, Model: model, DocsDir: docsDir, Proceed: false}, nil
+			return Answers{Agent: agent, Model: resolveModel(modelChoice, customModel), DocsDir: docsDir, DocsInGit: docsInGit, Layout: layout, Proceed: false}, nil
 		}
 		return Answers{}, fmt.Errorf("wizard: setup form: %w", err)
 	}
 
-	return Answers{Agent: agent, Model: model, DocsDir: docsDir, Proceed: proceed}, nil
+	return Answers{
+		Agent:     agent,
+		Model:     resolveModel(modelChoice, customModel),
+		DocsDir:   docsDir,
+		DocsInGit: docsInGit,
+		Layout:    layout,
+		Proceed:   proceed,
+	}, nil
+}
+
+// isGradedModel reports whether id is one of the bakeoff's ranked models.
+func isGradedModel(id string) bool {
+	for _, m := range GradedModels {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveModel collapses the select and the free-text field into the one
+// model string the connector actually gets.
+func resolveModel(choice, custom string) string {
+	if choice == ModelOther {
+		return custom
+	}
+	return choice
 }

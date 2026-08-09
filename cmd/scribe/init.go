@@ -88,6 +88,8 @@ The docs path is fixed at docs/scribe (decision 9) and is not configurable.`,
 
 	cmd.Flags().String("agent", "", "writer agent connector (default: "+wizard.DefaultAgent+")")
 	cmd.Flags().String("model", "", "model passed to the writer agent (default: "+wizard.DefaultModel+")")
+	cmd.Flags().Bool("docs-in-git", false, "commit the docs instead of adding them to .gitignore")
+	cmd.Flags().String("layout", "", "docs layout: per-session or shared (default: per-session)")
 	cmd.Flags().Bool("yes", false, "skip the interactive wizard and review screen; use flags/defaults")
 	cmd.Flags().Bool("apply", false, "write for real: docs, Stop hook, config. Default is a dry run")
 
@@ -100,6 +102,8 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	agentFlag, _ := cmd.Flags().GetString("agent")
 	modelFlag, _ := cmd.Flags().GetString("model")
+	docsInGitFlag, _ := cmd.Flags().GetBool("docs-in-git")
+	layoutFlag, _ := cmd.Flags().GetString("layout")
 	yes, _ := cmd.Flags().GetBool("yes")
 	apply, _ := cmd.Flags().GetBool("apply")
 
@@ -148,11 +152,21 @@ func runInit(cmd *cobra.Command, _ []string) error {
 			return nil
 		}
 	} else {
+		// No terminal: fall back to flags and the documented defaults. The
+		// onboarding questions the wizard asks (docs in git, layout) have
+		// no answer here, so they take the conservative default — docs
+		// stay out of git, layout per-session — and --docs-in-git /
+		// --layout let a script say otherwise explicitly.
 		answers = wizard.Answers{
-			Agent:   firstNonEmpty(agentFlag, wizard.DefaultAgent),
-			Model:   firstNonEmpty(modelFlag, wizard.DefaultModel),
-			DocsDir: scribe.DocsDir,
-			Proceed: true,
+			Agent:     firstNonEmpty(agentFlag, wizard.DefaultAgent),
+			Model:     firstNonEmpty(modelFlag, wizard.DefaultModel),
+			DocsDir:   scribe.DocsDir,
+			DocsInGit: docsInGitFlag,
+			Layout:    wizard.Layout(firstNonEmpty(layoutFlag, string(wizard.LayoutPerSession))),
+			Proceed:   true,
+		}
+		if answers.Layout != wizard.LayoutPerSession && answers.Layout != wizard.LayoutShared {
+			return fmt.Errorf("scribe init: --layout must be %q or %q, got %q", wizard.LayoutPerSession, wizard.LayoutShared, answers.Layout)
 		}
 	}
 
@@ -334,15 +348,17 @@ func applyPreview(repoRoot string, preview map[scribe.Doc]string, answers wizard
 	}
 
 	if err := install.WriteConfig(repoRoot, install.Config{
-		Agent:   answers.Agent,
-		Model:   answers.Model,
-		DocsDir: answers.DocsDir,
-		Enabled: true,
+		Agent:     answers.Agent,
+		Model:     answers.Model,
+		DocsDir:   answers.DocsDir,
+		Enabled:   true,
+		DocsInGit: answers.DocsInGit,
+		Layout:    string(answers.Layout),
 	}); err != nil {
 		return fmt.Errorf("scribe init: writing config: %w", err)
 	}
 
-	ignored, err := ensureGitignore(repoRoot)
+	ignored, err := ensureGitignore(repoRoot, answers.DocsInGit)
 	if err != nil {
 		return fmt.Errorf("scribe init: %w", err)
 	}
@@ -356,33 +372,39 @@ func applyPreview(repoRoot string, preview map[scribe.Doc]string, answers wizard
 	} else {
 		fmt.Fprintf(out, "Installed Stop hook in %s\n", hookResult.SettingsPath)
 	}
-	if ignored {
-		fmt.Fprintf(out, "Added %s/ and %s/ to .gitignore\n", scribe.StateDir, scribe.DocsDir)
+	if len(ignored) > 0 {
+		fmt.Fprintf(out, "Added %s to .gitignore\n", strings.Join(ignored, " and "))
+	}
+	if answers.DocsInGit {
+		fmt.Fprintf(out, "%s/ is committed to git — the docs are part of the repo.\n", scribe.DocsDir)
 	}
 	fmt.Fprintln(out, "\nscribe is now on for this repo — the four docs stay current after every reply.")
 	return nil
 }
 
-// gitignoreEntries are what init adds to an onboarded repo. .scribe/ is
-// pure local state (queue, lock, offsets, logs) and has no business in
-// anyone's history. docs/scribe/ follows PLAN.md's "gitignore for the first
-// week regardless" stance while the committed-or-ignored question is still
-// open (OPEN-ITEMS item 3) — if that lands on "commit them", this is the
-// one place to change.
-var gitignoreEntries = []string{scribe.StateDir + "/", scribe.DocsDir + "/"}
-
-// ensureGitignore appends whichever of gitignoreEntries the repo's
-// .gitignore doesn't already have, and reports whether it changed anything.
+// ensureGitignore appends the ignore entries this repo needs and returns
+// the ones it added.
 //
-// Without this, `scribe init` leaves the operator with a repo full of
-// untracked files it created itself, which reads as scribe making a mess of
-// their working tree. It appends rather than rewrites, and matches on exact
-// lines so a repo that already ignores these (this one does) is untouched.
-func ensureGitignore(repoRoot string) (bool, error) {
+// .scribe/ is always ignored: it's pure local state (queue, lock, offsets,
+// logs) and has no business in anyone's history. docs/scribe/ depends on
+// what the operator chose at onboarding — committing generated docs is a
+// real choice with real trade-offs (reviewable in PRs and undoable via git,
+// versus a working tree that goes dirty mid-session), and it's theirs to
+// make, not scribe's (OPEN-ITEMS item 3).
+//
+// Without this, init leaves a repo full of untracked files it created
+// itself, which reads as scribe making a mess of someone's working tree. It
+// appends rather than rewrites, and matches exact lines so a repo that
+// already ignores these is left alone.
+func ensureGitignore(repoRoot string, docsInGit bool) ([]string, error) {
+	gitignoreEntries := []string{scribe.StateDir + "/"}
+	if !docsInGit {
+		gitignoreEntries = append(gitignoreEntries, scribe.DocsDir+"/")
+	}
 	path := filepath.Join(repoRoot, ".gitignore")
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("reading .gitignore: %w", err)
+		return nil, fmt.Errorf("reading .gitignore: %w", err)
 	}
 
 	have := make(map[string]bool)
@@ -397,7 +419,7 @@ func ensureGitignore(repoRoot string) (bool, error) {
 		}
 	}
 	if len(missing) == 0 {
-		return false, nil
+		return nil, nil
 	}
 
 	var b strings.Builder
@@ -410,9 +432,9 @@ func ensureGitignore(repoRoot string) (bool, error) {
 	b.WriteString("\n")
 
 	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
-		return false, fmt.Errorf("writing .gitignore: %w", err)
+		return nil, fmt.Errorf("writing .gitignore: %w", err)
 	}
-	return true, nil
+	return missing, nil
 }
 
 // findGitRoot walks up from cwd looking for a .git entry (a directory for

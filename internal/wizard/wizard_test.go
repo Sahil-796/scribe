@@ -126,3 +126,43 @@ func TestContainsString(t *testing.T) {
 		t.Error("containsString(nil, \"a\") = true, want false")
 	}
 }
+
+// TestResolveModel covers the select-plus-free-text pair the model question
+// uses: the graded models are offered as choices, and "something else"
+// reveals a field so nobody is limited to the three that happened to be
+// benchmarked once.
+func TestResolveModel(t *testing.T) {
+	tests := []struct {
+		name           string
+		choice, custom string
+		want           string
+	}{
+		{"graded model wins", GradedModels[0].ID, "ignored", GradedModels[0].ID},
+		{"other uses the typed value", ModelOther, "opencode/some-new-model", "opencode/some-new-model"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveModel(tt.choice, tt.custom); got != tt.want {
+				t.Errorf("resolveModel(%q, %q) = %q, want %q", tt.choice, tt.custom, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestGradedModelsRanking guards the ordering the form depends on: the
+// pre-selected option is the first, so it must stay the bakeoff's winner.
+// docs/findings/00-models.md is the source of truth.
+func TestGradedModelsRanking(t *testing.T) {
+	if len(GradedModels) < 2 {
+		t.Fatal("GradedModels should list every model phase 00 actually graded")
+	}
+	if GradedModels[0].ID != DefaultModel {
+		t.Errorf("first graded model %q should be DefaultModel %q — the form pre-selects it", GradedModels[0].ID, DefaultModel)
+	}
+	if !isGradedModel(DefaultModel) {
+		t.Error("isGradedModel(DefaultModel) = false")
+	}
+	if isGradedModel("opencode/not-a-real-model") {
+		t.Error("isGradedModel accepted an unknown model")
+	}
+}

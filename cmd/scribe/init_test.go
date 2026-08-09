@@ -406,3 +406,96 @@ type writerFunc func(string) (string, error)
 
 func (f writerFunc) Name() string                      { return "fake" }
 func (f writerFunc) Run(prompt string) (string, error) { return f(prompt) }
+
+// TestInit_DocsInGit_DoesNotIgnoreDocs covers the onboarding answer from
+// OPEN-ITEMS item 3: whether generated docs belong in git is the repo
+// owner's call. Choosing to commit them must not leave init quietly
+// gitignoring them anyway.
+func TestInit_DocsInGit_DoesNotIgnoreDocs(t *testing.T) {
+	withFakeWriter(t, fakeSeedOutput)
+	dir := newTestRepo(t)
+
+	if _, _, err := runInitCmd(t, dir, "--yes", "--apply", "--docs-in-git"); err != nil {
+		t.Fatalf("init --docs-in-git failed: %v", err)
+	}
+
+	b, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("expected .gitignore (for .scribe/) even when docs are committed: %v", err)
+	}
+	got := string(b)
+	if strings.Contains(got, scribe.DocsDir+"/") {
+		t.Errorf("--docs-in-git still gitignored %s:\n%s", scribe.DocsDir, got)
+	}
+	if !strings.Contains(got, scribe.StateDir+"/") {
+		t.Errorf(".scribe/ must always be ignored, it's local state:\n%s", got)
+	}
+
+	cfg, err := install.ReadConfig(dir)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if !cfg.DocsInGit {
+		t.Error("config.DocsInGit = false after --docs-in-git")
+	}
+}
+
+// TestInit_RecordsLayoutChoice pins that the layout answer is persisted.
+// Phase 06 consumes it; recording it now means the answer exists before the
+// code that reads it does.
+func TestInit_RecordsLayoutChoice(t *testing.T) {
+	for _, want := range []string{install.LayoutPerSession, install.LayoutShared} {
+		t.Run(want, func(t *testing.T) {
+			withFakeWriter(t, fakeSeedOutput)
+			dir := newTestRepo(t)
+
+			if _, _, err := runInitCmd(t, dir, "--yes", "--apply", "--layout", want); err != nil {
+				t.Fatalf("init --layout %s failed: %v", want, err)
+			}
+			cfg, err := install.ReadConfig(dir)
+			if err != nil {
+				t.Fatalf("reading config: %v", err)
+			}
+			if cfg.Layout != want {
+				t.Errorf("config.Layout = %q, want %q", cfg.Layout, want)
+			}
+		})
+	}
+}
+
+// TestInit_RejectsUnknownLayout: a typo in a script must fail loudly rather
+// than silently recording nonsense phase 06 would later have to interpret.
+func TestInit_RejectsUnknownLayout(t *testing.T) {
+	withFakeWriter(t, fakeSeedOutput)
+	dir := newTestRepo(t)
+
+	_, _, err := runInitCmd(t, dir, "--yes", "--layout", "per-persson")
+	if err == nil {
+		t.Fatal("expected an error for an unknown --layout value")
+	}
+	if !strings.Contains(err.Error(), "per-persson") {
+		t.Errorf("error should name the bad value, got: %v", err)
+	}
+}
+
+// TestInit_DefaultsToDocsOutOfGit: with no answer given, the conservative
+// choice holds — generated docs stay out of the repo until someone says
+// otherwise.
+func TestInit_DefaultsToDocsOutOfGit(t *testing.T) {
+	withFakeWriter(t, fakeSeedOutput)
+	dir := newTestRepo(t)
+
+	if _, _, err := runInitCmd(t, dir, "--yes", "--apply"); err != nil {
+		t.Fatalf("init failed: %v", err)
+	}
+	cfg, err := install.ReadConfig(dir)
+	if err != nil {
+		t.Fatalf("reading config: %v", err)
+	}
+	if cfg.DocsInGit {
+		t.Error("config.DocsInGit = true by default, want false")
+	}
+	if cfg.Layout != install.LayoutPerSession {
+		t.Errorf("config.Layout = %q by default, want %q", cfg.Layout, install.LayoutPerSession)
+	}
+}
