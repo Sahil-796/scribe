@@ -588,7 +588,7 @@ func TestBuildDocPromptIncludesOwnContentAndEntries(t *testing.T) {
 	entries := []scribe.Entry{
 		{Role: "user", Text: "do the thing", Timestamp: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)},
 	}
-	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries)
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
 	for _, want := range []string{"log content", "do the thing", noChangeSentinel} {
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
@@ -604,7 +604,7 @@ func TestBuildDocPromptIncludesOwnContentAndEntries(t *testing.T) {
 // never show up.
 func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
-	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries)
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
 
 	leaks := []string{
 		"one block per decision",   // DECISIONS guidance
@@ -630,12 +630,12 @@ func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "scrapping the plan"}}
 
-	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries)
+	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries, CodeWeightCheck)
 	if !contains(projectPrompt, "normal case") || !contains(projectPrompt, "remove that") {
 		t.Fatalf("PROJECT prompt missing correction-path guidance:\n%s", projectPrompt)
 	}
 
-	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries)
+	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries, CodeWeightCheck)
 	if !contains(decisionsPrompt, "dropped") || !contains(decisionsPrompt, "why") {
 		t.Fatalf("DECISIONS prompt missing correction-path guidance:\n%s", decisionsPrompt)
 	}
@@ -649,7 +649,7 @@ func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
 // filler.
 func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
-	prompt := buildDocPrompt(scribe.DocJournal, "current", entries)
+	prompt := buildDocPrompt(scribe.DocJournal, "current", entries, CodeWeightCheck)
 
 	for _, want := range []string{
 		"confidently wrong", // what it wants
@@ -661,6 +661,40 @@ func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
 		if !contains(prompt, want) {
 			t.Fatalf("JOURNAL prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+// TestBuildDocPromptCodeWeightChangesText checks phase 03 item 5's knob
+// actually changes what the writer is told, per weight value, and that
+// Deps.codeWeight() defaults an unset field to the safe CodeWeightCheck.
+func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
+	entries := []scribe.Entry{{Role: "user", Text: "shipped it"}}
+
+	check := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightCheck)
+	if !contains(check, "verify") {
+		t.Fatalf("CodeWeightCheck prompt should say 'verify':\n%s", check)
+	}
+	if contains(check, "may use it to source") {
+		t.Fatalf("CodeWeightCheck prompt should not offer to source content from code:\n%s", check)
+	}
+
+	full := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightFull)
+	if !contains(full, "may use it to source") {
+		t.Fatalf("CodeWeightFull prompt should say it may source content from code:\n%s", full)
+	}
+
+	off := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightOff)
+	if !contains(off, "do not have code access") {
+		t.Fatalf("CodeWeightOff prompt should say code access is off:\n%s", off)
+	}
+
+	var d Deps
+	if got := d.codeWeight(); got != CodeWeightCheck {
+		t.Fatalf("expected default CodeWeight to be %q, got %q", CodeWeightCheck, got)
+	}
+	d.CodeWeight = CodeWeightFull
+	if got := d.codeWeight(); got != CodeWeightFull {
+		t.Fatalf("expected an explicitly set CodeWeight to be honored, got %q", got)
 	}
 }
 

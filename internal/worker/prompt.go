@@ -190,12 +190,45 @@ an omission. Don't manufacture a struggle that wasn't there.`,
 	},
 }
 
+// codeAccessInstructions renders the text describing how much the writer
+// may lean on its read-only repo access, per the CodeWeight knob (locked
+// decision 7: "it can read the code, but the transcript leads"). Every
+// per-doc prompt gets this, not just PROJECT/DECISIONS — decision 7's
+// motivating failure ("discussed at length, never built, landed in the
+// changelog anyway") is specifically a CHANGELOG risk.
+func codeAccessInstructions(weight CodeWeight) string {
+	switch weight {
+	case CodeWeightFull:
+		return `You have read-only access to this repo's code and may use it to source
+content directly, not just verify claims made in the conversation — read
+the actual diff and describe what shipped, even where the conversation
+itself is vague or silent about the details.
+
+`
+	case CodeWeightOff:
+		return `You do not have code access for this run. Base everything only on the
+conversation below — do not claim to have checked the repo.
+
+`
+	default: // CodeWeightCheck, and any unrecognized value — fail toward the safe default.
+		return `You have read-only access to this repo's code. Use it only to verify
+claims made in the conversation — e.g. confirm a file the conversation says
+was created actually exists — never to source new content on your own. If
+the conversation discusses building something but you can't confirm it
+actually happened, don't write it up as done; the conversation leads, the
+code only checks it.
+
+`
+	}
+}
+
 // buildDocPrompt assembles one per-doc call: that doc's own guidance, its
-// output-format contract, the current content of *only this doc*, and the
-// new transcript entries. No other doc's content is included — a CHANGELOG
-// call has no business reading DECISIONS.md's current text, and keeping
-// the prompt small keeps the job focused (phase 03 item 1).
-func buildDocPrompt(doc scribe.Doc, currentContent string, entries []scribe.Entry) string {
+// output-format contract, the code-access instructions for weight, the
+// current content of *only this doc*, and the new transcript entries. No
+// other doc's content is included — a CHANGELOG call has no business
+// reading DECISIONS.md's current text, and keeping the prompt small keeps
+// the job focused (phase 03 item 1).
+func buildDocPrompt(doc scribe.Doc, currentContent string, entries []scribe.Entry, weight CodeWeight) string {
 	spec, ok := docPrompts[doc]
 	if !ok {
 		panic(fmt.Sprintf("worker: buildDocPrompt: no prompt spec for doc %q", doc))
@@ -204,6 +237,7 @@ func buildDocPrompt(doc scribe.Doc, currentContent string, entries []scribe.Entr
 	var b strings.Builder
 	b.WriteString(spec.guidance)
 	b.WriteString("\n\n")
+	b.WriteString(codeAccessInstructions(weight))
 
 	if spec.isState {
 		fmt.Fprintf(&b, `If %s needs to change, respond with ONLY the complete new file content —

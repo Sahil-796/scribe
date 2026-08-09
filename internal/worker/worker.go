@@ -8,7 +8,11 @@
 // combined prompt covering all four docs. Phase 03 ("make the writing
 // good") replaces that with a focused prompt per doc (see prompt.go) — each
 // doc gets its own call, its own guidance, and only its own current
-// content, rather than one prompt trying to do four jobs at once.
+// content, rather than one prompt trying to do four jobs at once — plus a
+// CodeWeight knob controlling how much each of those calls may lean on
+// read-only repo code access. Redaction and install-config plumbing are
+// still phase 04; CodeWeight lives only as a field on Deps here, not wired
+// to any config file yet.
 //
 // This package depends on two sibling packages by contract, not by import:
 // internal/queue (unit 1B) and internal/transcript (unit 1C) were still
@@ -59,7 +63,29 @@ type OffsetLoader func(repoRoot, sessionID string) (scribe.Offset, error)
 // OffsetSaver matches internal/transcript.SaveOffset's signature.
 type OffsetSaver func(repoRoot string, o scribe.Offset) error
 
-// Deps wires the worker to the rest of the system. Every field is required.
+// CodeWeight controls how much the writer's per-doc prompts tell it to lean
+// on its read-only repo code access, per locked decision 7 ("it can read
+// the code, but the transcript leads. Weighting is configurable; code
+// access can be turned off."). This is a worker Options knob, not config —
+// wiring it through internal/install's config file is phase 04 work and
+// outside this package's job.
+type CodeWeight string
+
+const (
+	// CodeWeightCheck is the default: code access verifies claims the
+	// conversation makes, it doesn't source new content. This is what stops
+	// the failure decision 7 names — something discussed at length, never
+	// built, landed in the changelog anyway.
+	CodeWeightCheck CodeWeight = "check"
+	// CodeWeightFull allows the writer to source doc content straight from
+	// the code, not just verify claims against it.
+	CodeWeightFull CodeWeight = "full"
+	// CodeWeightOff turns code access off for the writer entirely.
+	CodeWeightOff CodeWeight = "off"
+)
+
+// Deps wires the worker to the rest of the system. Every field is required
+// except CodeWeight, which defaults to CodeWeightCheck.
 type Deps struct {
 	Queue          Queue
 	Docs           DocStore
@@ -67,6 +93,10 @@ type Deps struct {
 	ReadTranscript TranscriptReader
 	LoadOffset     OffsetLoader
 	SaveOffset     OffsetSaver
+
+	// CodeWeight controls the per-doc prompts' code-access instructions.
+	// Zero value (empty string) behaves as CodeWeightCheck.
+	CodeWeight CodeWeight
 
 	// Now is injectable for tests; defaults to time.Now.
 	Now func() time.Time
@@ -77,6 +107,15 @@ func (d Deps) now() time.Time {
 		return d.Now()
 	}
 	return time.Now()
+}
+
+// codeWeight returns d.CodeWeight, defaulting an unset field to
+// CodeWeightCheck — the safe default per decision 7.
+func (d Deps) codeWeight() CodeWeight {
+	if d.CodeWeight == "" {
+		return CodeWeightCheck
+	}
+	return d.CodeWeight
 }
 
 // Run is the loop's entrypoint, called once per Stop-hook-triggered wakeup.
@@ -342,7 +381,7 @@ func gateProductLevel(deps Deps, entries []scribe.Entry) (bool, error) {
 // runDocWriter makes one writer call for doc d and, if it came back with a
 // real change (not noChangeSentinel), records it into result.
 func runDocWriter(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entries []scribe.Entry, result edits) error {
-	prompt := buildDocPrompt(d, current[d], entries)
+	prompt := buildDocPrompt(d, current[d], entries, deps.codeWeight())
 	out, err := deps.Writer.Run(prompt)
 	if err != nil {
 		return fmt.Errorf("worker: writer run for %s: %w", d, err)
