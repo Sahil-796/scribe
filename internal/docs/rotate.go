@@ -92,6 +92,24 @@ func archivePointerText(n int, relPath string) string {
 	return fmt.Sprintf("%s\n> _%d earlier %s archived to [%s](%s) to stay under the size cap._", archivePointerMarker, n, noun, relPath, relPath)
 }
 
+// SplitBlocks exposes parseHistoryDoc's title/blocks split to callers
+// outside this package — namely integration tests in internal/worker that
+// verify rotation through the real worker run loop and need to inspect both
+// the live doc and archive files without duplicating the on-disk format
+// here. Not needed by any production caller; AppendHistory and its
+// machinery stay the only writer of this format.
+func SplitBlocks(content string) (title string, blocks []string) {
+	return parseHistoryDoc(content)
+}
+
+// IsArchivePointer reports whether block is a rotation pointer rather than
+// a real entry — see isArchivePointer. Exported for the same reason as
+// SplitBlocks: verification code outside this package needs to tell the
+// two apart when checking that no entry bytes were lost across rotation.
+func IsArchivePointer(block string) bool {
+	return isArchivePointer(block)
+}
+
 // archiveTitle is the header line a new archive file is seeded with.
 func archiveTitle(doc scribe.Doc) string {
 	return strings.TrimRight(defaultHeader[doc], "\n") + " (archived)"
