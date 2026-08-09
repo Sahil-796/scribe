@@ -279,8 +279,15 @@ func Ask(o Options) (Answers, error) {
 
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			// Ctrl+C / Esc: not an error, just "the user backed out".
-			// Report whatever was chosen so far but with Proceed false.
+			// Ctrl+C: not an error, just "the user backed out". Report
+			// whatever was chosen so far but with Proceed false.
+			//
+			// Ctrl+C only — this comment used to say "Ctrl+C / Esc" and
+			// that was wrong. huh v1.0.0 binds Quit to ctrl+c alone
+			// (keymap.go), so a bare Esc does nothing here; verified
+			// against the vendored source and live through a pty. If Esc
+			// should also back out, that's a binding to add, not a
+			// behaviour that already exists.
 			return Answers{Agent: agent, Model: resolveModel(modelChoice, customModel), DocsDir: docsDir, DocsInGit: docsInGit, Layout: layout, Proceed: false}, nil
 		}
 		return Answers{}, fmt.Errorf("wizard: setup form: %w", err)

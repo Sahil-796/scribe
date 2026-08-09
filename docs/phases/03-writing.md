@@ -70,11 +70,13 @@ remove — one response where a mistake in any section contaminates the rest. Th
 real: 7.8–15.6 s per call, now up to four of them. The gate is what keeps the common
 case at two.
 
-**Each call sees only its own doc.** The correction path therefore relies on the
-PROJECT call and the DECISIONS call independently reaching the same conclusion from the
-same transcript slice, rather than on shared context. This is the phase's least
-confident decision. If it underperforms live, the fix is passing all four docs' current
-content into every call while keeping the per-doc guidance.
+**Each call sees only its own doc — with one deliberate exception.** Independence is
+right for three of the four docs and was wrong for one pair. The correction path is a
+single obligation split across two calls (PROJECT drops the claim, DECISIONS records
+why), so asking them blind meant they could disagree and silently lose content. That
+was the phase's least confident decision and it did not survive contact with a test —
+see the close-out pass below. DECISIONS now receives PROJECT's before/after whenever
+PROJECT was rewritten; nothing else shares context.
 
 **`NO_CHANGE`, and blank is not `NO_CHANGE`.** An empty response is a hard error, not a
 quiet decline. The prompt always asks for content or the sentinel, so blank means
@@ -143,6 +145,44 @@ is better" is currently reasoning, not evidence.
 **The on-disk format changed with no migration.** CHANGELOG and JOURNAL are now title
 plus separated blocks. Any repo already onboarded has the old plain-concatenated
 format. Cheap to fix now, expensive later.
+
+## The close-out pass
+
+After the phase merged, a three-agent fleet plus hand work closed seven items. Two of
+them turned into real defects rather than the test-writing they were scoped as:
+
+- **The correction path silently lost content** (item 29). Confirmed by test, not
+  theory: PROJECT drops a claim, DECISIONS answers `NO_CHANGE` in good faith because it
+  was asked blind, and the claim vanishes with nothing recorded. PROJECT and DECISIONS
+  are now ordered rather than looped, and DECISIONS is handed PROJECT's before/after
+  with an explicit instruction to record what was dropped. A remaining decline is
+  reported on `Deps.Log` instead of passing in silence.
+- **Archive pointers ate the size cap** (item 30). Pointers are never themselves
+  rotated, so every rotation permanently spent more of the budget on bookkeeping — a
+  20-cycle test left a doc sitting permanently *over* its cap from pointer growth
+  alone. They now carry their count and path in the marker and coalesce to one per
+  archive file.
+
+Worth recording about the first fix: the obvious way to detect a dropped claim is
+"PROJECT got shorter," and it is wrong. Dropping a claim routinely produces *longer*
+text — "Syncs on every save" becomes "No longer syncs on save." The signal used instead
+is the gate's own semantics, which only says YES when something was chosen, dropped or
+superseded.
+
+Also closed: rotation proven through the real run loop with a byte-conservation
+invariant (item 30), the cross-process lock and coalescing proven under real OS
+processes (item 22), the init wizard driven through a pty (item 15), and the Stop-hook
+cadence settled on 44 observations (item 10, `docs/findings/10-stop-hook-cadence.md`).
+
+Two diagnoses worth keeping:
+
+- The lock test that appeared to show **4 winners out of 12** was not a lock bug. The
+  helper exited immediately after winning, so `isStale` correctly reclaimed a lock whose
+  holder was dead. The fix was to make winners *hold* the lock; the stale-reclaim path
+  is load-bearing and must not be "fixed" away, since without it a killed run blocks the
+  repo forever.
+- `wizard.go` claimed Ctrl+C **and** Esc aborted the form. huh v1.0.0 binds Quit to
+  `ctrl+c` alone. Corrected, and whether Esc should abort is now item 32.
 
 ## Next
 

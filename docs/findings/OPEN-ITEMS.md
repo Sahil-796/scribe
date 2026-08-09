@@ -1,4 +1,4 @@
-# Open items — as of end of phase 03
+# Open items — as of the phase 03 close-out pass
 
 Everything that is broken, unproven, or waiting on a decision. Nothing here is
 covered by a passing test, which is precisely why it's written down.
@@ -6,39 +6,25 @@ covered by a passing test, which is precisely why it's written down.
 Kept current as phases land. Delete lines when they're genuinely done, not when
 they're merely worked on.
 
-**Resolved and deleted this pass:** the name (locked to `scribe`), items 2, 3, 4, 5, 7,
-9, 11, 12, 16, 17, 18, 19, 21, 23, 24 and 25. Numbers are never reused — a gap means
-something was closed, and `docs/phases/*.md` carries the write-up.
+**Resolved and deleted:** the name (locked to `scribe`), items 2, 3, 4, 5, 7, 9, 11,
+12, 16, 17, 18, 19, 21, 23, 24, 25, and — in the close-out pass — 10, 15, 22, 26, 27,
+29 and 30. Numbers are never reused: a gap means something was closed, and
+`docs/phases/*.md` plus `docs/findings/*.md` carry the write-ups.
 
 ---
 
 ## Needs you — decisions nobody else can make
 
-### 26. The history-doc format changed with no migration path
+### 32. Should Esc back out of the init wizard?
 
-Phase 03 stores CHANGELOG and JOURNAL as a title plus blocks separated by
-`<!-- scribe:entry -->`. Any repo onboarded before that has plain-concatenated docs,
-which the new parser reads as a single enormous block — rotation would then archive
-nothing, or archive everything at once.
+`wizard.go` claimed Ctrl+C **and** Esc aborted the form. Only Ctrl+C does: huh v1.0.0
+binds `Quit` to `ctrl+c` alone, verified against the vendored source and live through a
+pty. The comment is corrected and a test documents the real behaviour.
 
-Nothing real is onboarded yet, so today the fix costs nothing. It gets steadily more
-expensive. **Decide: migrate on read, or declare the old format unsupported and say so
-in the phase 04 release note.**
-
-### 27. Committed docs plus rotation is an unexamined combination
-
-`init` now asks whether to commit `docs/scribe/` (item 3's resolution), and phase 03
-added rotation, which creates files under `docs/scribe/archive/` on its own. Answer
-"commit them" and every Claude reply dirties the working tree, with new files appearing
-whenever a doc crosses 32 KB.
-
-That sits awkwardly with locked decision 10 — "git is the undo, and committing stays
-yours." The two features were built in parallel branches and nobody has looked at them
-together. Not broken, but somebody should decide what the intended experience is.
-
----
-
-## Broken
+What's undecided is whether that's a gap or the intent. Esc-to-cancel is a common
+terminal convention and its absence is the kind of thing an operator discovers by
+pressing Esc twice and then killing the terminal. Adding the binding is small; it's a
+product call, not a bug fix.
 
 ### 6. `codex` install is damaged — needs sudo
 
@@ -86,37 +72,20 @@ auto-reject either, so the shape of a genuinely auto-rejected run's output is st
 assumption from phase 00's notes. The narrower definition makes a false positive less
 likely and a missed true positive slightly more so.
 
-### 29. Per-doc calls can't see each other, and the correction path depends on them agreeing
-
-Each phase 03 writer call receives only its own doc's current content. So the
-correction path — pull an entry from PROJECT, record the reason in DECISIONS — works
-only if two independent calls reach the same conclusion from the same transcript slice.
-
-No live run has exercised a real reversal end to end. If it turns out to half-fire
-(PROJECT edited, DECISIONS silent) the result is worse than not trying: an entry
-disappears with no recorded reason, which `PLAN.md` treats as a bug. The fix, if
-needed, is passing all four docs into every call while keeping per-doc guidance.
-
-### 30. Rotation has never fired outside a test
-
-No real doc has reached the 32 KB cap. Archive-file creation, the pointer block, and
-month-boundary grouping are covered by unit tests and nothing else. Related: archive
-pointers accumulate in the live doc forever and are never themselves rotated, so a
-long-lived doc slowly spends cap on pointers. Bounded and small, but unbounded in
-count.
-
-### 10. Stop-hook behaviour during subagents — better evidence, not conclusive
-
-One real burst in this repo's own history showed 7 back-to-back subagent delegations
-followed by exactly one `stop_hook_summary`. That supports "one Stop per turn
-regardless of delegation count" but is a single observation, not a proof.
-
-### 13. opencode permissions are pre-opened on this machine
+### 13. opencode permissions are pre-opened on this machine — mitigated, not gone
 
 This machine's opencode has permissions opened globally via an `oh-my-openagent`
-plugin config. Tests here can pass for the wrong reason. Phase 00 worked around it
-with a forced local `ask` override; anything testing the approval path must do the
-same or it proves nothing.
+plugin config, so anything exercising the approval path can pass for the wrong reason.
+
+`cmd/scribe/opencode_ask_guard_test.go` now makes phase 00's hand-rolled workaround
+reusable: a helper that writes a project-local `ask` override so a test is forced
+through opencode's real approval path. As of that pass, no test in the repo spawns a
+real opencode process at all, so nothing is currently passing falsely — the guard
+exists for whoever writes the first one.
+
+Kept open because the environmental hazard is unchanged and applies to **live runs
+done by hand**, which is exactly what item 28 involves. Anyone doing those must use
+the override or their result says nothing about approval behaviour.
 
 ### 14. `scribe init` — run for real only on scratch repos
 
@@ -128,15 +97,6 @@ Still unproven: `init` against a repo with substantial existing history (the rep
 pass at real scale), and against a repo whose README and manifests are messier than a
 scratch fixture's. The seed pass has only ever seen a small, tidy repo. Phase 03
 doubled replay's calls per chunk, so a large history now costs twice what it did.
-
-### 15. The wizard's interactive path is entirely untested
-
-No pty in this environment. Unverified: actual huh form rendering and field
-navigation, validation messages, the `huh.ErrUserAborted` (Ctrl+C/Esc) branch in
-`Ask`/`Review`, the interactive redraw branch of `Progress`, and `Ask`/`Review`
-returning the operator's actual chosen values on the happy path. Only the
-not-interactive short-circuits are covered. Phase 02's onboarding work added a
-conditional model field and two more questions to this untested surface.
 
 ### 31. `Layout` is asked at onboarding but nothing reads it
 
@@ -154,13 +114,6 @@ it exists.
 
 All keys and values survive; original key order does not. Byte-exact preservation
 would need a JSON AST library, which isn't a dependency.
-
-### 22. Concurrency under real triggers is still unproven
-
-Offset advancement across sessions, multi-trigger coalescing, and the per-repo lock
-under genuine contention have only been exercised by `internal/worker`'s fakes. Live,
-only a single uncontended lock acquire/release has been observed. Phase 03 made each
-run longer (up to four writer calls), which widens the window for a real collision.
 
 ---
 
