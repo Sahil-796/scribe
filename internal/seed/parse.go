@@ -1,62 +1,45 @@
 package seed
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
-
-	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
-// wantDocs are the only keys Parse accepts, per seedInstructions in
-// prompt.go: the seed pass only ever produces PROJECT.md and DECISIONS.md
-// — CHANGELOG.md and JOURNAL.md are history docs with nothing to seed from
-// yet (that's the replay pass's job, not this one).
-var wantDocs = map[scribe.Doc]bool{
-	scribe.DocProject:   true,
-	scribe.DocDecisions: true,
+// ParseProject and ParseDecisions read one writer call's stdout into that
+// doc's content. Since ProjectPrompt/DecisionsPrompt (prompt.go) each ask
+// for exactly one doc's Markdown, there's no JSON envelope to decode here —
+// unlike internal/worker and internal/replay, which multiplex several
+// possible doc keys through one call and need a key to disambiguate, a
+// single-doc response is just the content itself (code-fence-tolerant, in
+// case the writer wraps it despite being told not to).
+//
+// An empty response is always an error, for both docs: the seed pass
+// exists specifically to produce first-draft content, and a writer that
+// returns nothing produced nothing. That's different from a short response
+// — "no decisions recorded yet" is a valid, deliberately encouraged
+// DECISIONS.md (see decisionsInstructions in prompt.go); it just can't be
+// the empty string. Letting an empty response look like success would
+// leave a repo's first doc silently missing with no signal anything went
+// wrong (see docs/PLAN.md's "fail loudly rather than writing nonsense
+// quietly").
+func ParseProject(writerOut string) (string, error) {
+	return parseDoc(writerOut, "PROJECT.md")
 }
 
-// Parse reads the writer's stdout into seeded content. Keys are limited to
-// scribe.DocProject and scribe.DocDecisions.
-//
-// Unlike internal/worker's parseEdits — where an empty response legitimately
-// means "nothing changed this run" — an empty or unparseable response here
-// is always an error. The seed pass exists specifically to produce these
-// two docs; a writer that returns nothing produced nothing, and letting
-// that look like success would leave a repo's first PROJECT.md silently
-// missing with no signal anything went wrong (see docs/PLAN.md's "fail
-// loudly rather than writing nonsense quietly").
-func Parse(writerOut string) (map[scribe.Doc]string, error) {
+func ParseDecisions(writerOut string) (string, error) {
+	return parseDoc(writerOut, "DECISIONS.md")
+}
+
+func parseDoc(writerOut, docName string) (string, error) {
 	cleaned := stripCodeFence(strings.TrimSpace(writerOut))
 	if cleaned == "" {
-		return nil, fmt.Errorf("seed: writer returned empty output")
+		return "", fmt.Errorf("seed: writer returned empty output for %s", docName)
 	}
-
-	var raw map[string]string
-	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
-		return nil, fmt.Errorf("seed: writer output is not the expected JSON object: %w", err)
-	}
-	if len(raw) == 0 {
-		return nil, fmt.Errorf("seed: writer returned an empty JSON object")
-	}
-
-	result := make(map[scribe.Doc]string, len(raw))
-	for k, v := range raw {
-		d := scribe.Doc(k)
-		if !wantDocs[d] {
-			return nil, fmt.Errorf("seed: writer returned unexpected doc key %q (want PROJECT.md or DECISIONS.md)", k)
-		}
-		if strings.TrimSpace(v) == "" {
-			return nil, fmt.Errorf("seed: writer returned empty content for %q", k)
-		}
-		result[d] = v
-	}
-	return result, nil
+	return cleaned, nil
 }
 
 // stripCodeFence tolerates the common small deviation of a model wrapping
-// its JSON in a ```/```json fence despite being told not to. Mirrors
+// its content in a ```/```json fence despite being told not to. Mirrors
 // internal/worker/parse.go's stripCodeFence exactly (kept as a local copy,
 // not an import, since that one is unexported — see this package's doc
 // comment on matching the worker's conventions rather than depending on
