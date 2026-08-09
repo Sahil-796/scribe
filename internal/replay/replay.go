@@ -13,8 +13,10 @@
 //
 // A session's transcript can be arbitrarily large, so Run never hands one
 // writer call a whole session: it splits each session into chunks of at
-// most Options.MaxEntriesPerChunk entries (chunkEntries below) and makes one
-// writer call per chunk. Progress is checkpointed to disk after every
+// most Options.MaxEntriesPerChunk entries (chunkEntries below) and makes two
+// writer calls per chunk — one prompt asking only for a CHANGELOG.md entry,
+// one asking only for a JOURNAL.md entry (see prompt.go's buildChangelogPrompt
+// and buildJournalPrompt). Progress is checkpointed to disk after every
 // successful chunk (see state.go), so a run interrupted partway — killed,
 // crashed, or the writer timing out — can be re-invoked and picks up where
 // it left off instead of re-billing already-completed chunks.
@@ -262,28 +264,46 @@ func Run(o Options) error {
 // emits every entry it produced. Nothing about this chunk's outcome is
 // persisted to resume state here — the caller decides completion based on
 // whether this returns an error.
+//
+// Two writer calls per chunk, not one: CHANGELOG.md and JOURNAL.md want
+// different things from the same material (a terse dated fact vs. a
+// narrative of friction), and prompt.go's buildChangelogPrompt /
+// buildJournalPrompt give each its own focused instructions rather than
+// asking one call to do both jobs at once. Both calls still go through the
+// same parseReplayEdits (parse.go) — it already accepts either doc key, so
+// there is no need for a second parser.
 func runChunk(o Options, entries []scribe.Entry) error {
-	out, err := o.Writer.Run(buildReplayPrompt(entries))
+	changelogOut, err := o.Writer.Run(buildChangelogPrompt(entries))
 	if err != nil {
-		return fmt.Errorf("writer: %w", err)
+		return fmt.Errorf("writer (changelog): %w", err)
+	}
+	changelogEdits, err := parseReplayEdits(changelogOut)
+	if err != nil {
+		return fmt.Errorf("parse changelog writer output: %w", err)
 	}
 
-	edits, err := parseReplayEdits(out)
+	journalOut, err := o.Writer.Run(buildJournalPrompt(entries))
 	if err != nil {
-		return fmt.Errorf("parse writer output: %w", err)
+		return fmt.Errorf("writer (journal): %w", err)
+	}
+	journalEdits, err := parseReplayEdits(journalOut)
+	if err != nil {
+		return fmt.Errorf("parse journal writer output: %w", err)
 	}
 
 	if o.Emit == nil {
 		return nil
 	}
 
-	for _, d := range []scribe.Doc{scribe.DocChangelog, scribe.DocJournal} {
-		content, ok := edits[d]
-		if !ok || content == "" {
-			continue
-		}
-		if err := o.Emit(d, content); err != nil {
-			return fmt.Errorf("emit %s: %w", d, err)
+	for _, batch := range []edits{changelogEdits, journalEdits} {
+		for _, d := range []scribe.Doc{scribe.DocChangelog, scribe.DocJournal} {
+			content, ok := batch[d]
+			if !ok || content == "" {
+				continue
+			}
+			if err := o.Emit(d, content); err != nil {
+				return fmt.Errorf("emit %s: %w", d, err)
+			}
 		}
 	}
 	return nil

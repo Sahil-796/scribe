@@ -250,11 +250,17 @@ func TestRun_EmitsAndChunks(t *testing.T) {
 	sessPath := filepath.Join(tmp, "sess.jsonl")
 	writeFixture(t, sessPath, 5) // 5 entries, chunk size 2 -> 3 chunks
 
+	// Two writer calls per chunk now (changelog prompt, then journal
+	// prompt) — see runChunk in replay.go. Order per chunk is
+	// [changelog response, journal response].
 	w := &fakeWriter{
 		responses: []string{
-			`{"CHANGELOG.md":"chunk0 changelog"}`,
-			`{"JOURNAL.md":"chunk1 journal"}`,
-			`{}`, // last chunk: nothing worth recording
+			`{"CHANGELOG.md":"chunk0 changelog"}`, // chunk0 changelog
+			`{}`,                                  // chunk0 journal: nothing
+			`{}`,                                  // chunk1 changelog: nothing
+			`{"JOURNAL.md":"chunk1 journal"}`,     // chunk1 journal
+			`{}`,                                  // chunk2 changelog: nothing
+			`{}`,                                  // chunk2 journal: nothing
 		},
 	}
 
@@ -288,8 +294,8 @@ func TestRun_EmitsAndChunks(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("emitted = %+v, want %+v", got, want)
 	}
-	if w.calls != 3 {
-		t.Errorf("writer called %d times, want 3 (one per chunk)", w.calls)
+	if w.calls != 6 {
+		t.Errorf("writer called %d times, want 6 (changelog + journal calls, one pair per chunk)", w.calls)
 	}
 	if len(progressLabels) != 3 {
 		t.Errorf("progress called %d times, want 3: %v", len(progressLabels), progressLabels)
@@ -338,10 +344,12 @@ func TestRun_ResumesAfterFailure(t *testing.T) {
 
 	statePath := filepath.Join(tmp, ".scribe", "replay.json")
 
-	// First run: chunk 0 succeeds, chunk 1's writer call fails.
+	// First run: chunk 0 succeeds (both its writer calls), chunk 1's first
+	// writer call (its changelog prompt, call index 2 — two calls per
+	// chunk now) fails.
 	w1 := &fakeWriter{
-		responses: []string{`{"CHANGELOG.md":"chunk0"}`},
-		errs:      map[int]error{1: errors.New("writer boom")},
+		responses: []string{`{"CHANGELOG.md":"chunk0"}`, `{}`},
+		errs:      map[int]error{2: errors.New("writer boom")},
 	}
 	var got1 []emitted
 	err := Run(Options{
@@ -366,8 +374,9 @@ func TestRun_ResumesAfterFailure(t *testing.T) {
 	}
 
 	// Second run, same state path: chunk 0 must be skipped (no writer call,
-	// no re-emit), chunk 1 must be retried and now succeed.
-	w2 := &fakeWriter{responses: []string{`{"JOURNAL.md":"chunk1"}`}}
+	// no re-emit), chunk 1 must be retried and now succeed (both its calls:
+	// changelog then journal).
+	w2 := &fakeWriter{responses: []string{`{}`, `{"JOURNAL.md":"chunk1"}`}}
 	var got2 []emitted
 	err = Run(Options{
 		RepoRoot:           tmp,
@@ -383,8 +392,8 @@ func TestRun_ResumesAfterFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Run: %v", err)
 	}
-	if w2.calls != 1 {
-		t.Errorf("second run called writer %d times, want 1 (only the retried chunk)", w2.calls)
+	if w2.calls != 2 {
+		t.Errorf("second run called writer %d times, want 2 (changelog + journal calls for the one retried chunk)", w2.calls)
 	}
 	if len(got2) != 1 || got2[0].entry != "chunk1" {
 		t.Errorf("second run emitted %+v, want just chunk1's entry (chunk0 must not be re-emitted)", got2)
@@ -414,8 +423,8 @@ func TestRun_CorruptStateDegradesToStartOver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run with corrupt state should degrade to start-over, not error: %v", err)
 	}
-	if w.calls != 1 {
-		t.Errorf("writer called %d times, want 1 — corrupt state should not crash or skip work", w.calls)
+	if w.calls != 2 {
+		t.Errorf("writer called %d times, want 2 (changelog + journal calls) — corrupt state should not crash or skip work", w.calls)
 	}
 }
 
@@ -512,7 +521,13 @@ func TestRun_UsesGivenSessionsOrder(t *testing.T) {
 		paths = append(paths, p)
 	}
 
-	w := &fakeWriter{responses: []string{`{"JOURNAL.md":"first"}`, `{"JOURNAL.md":"second"}`}}
+	// Two calls per chunk now: [changelog, journal]. Put the distinguishing
+	// content on each session's journal call so order still reflects
+	// session order, not call order within a chunk.
+	w := &fakeWriter{responses: []string{
+		`{}`, `{"JOURNAL.md":"first"}`, // session s0's chunk
+		`{}`, `{"JOURNAL.md":"second"}`, // session s1's chunk
+	}}
 	var order []string
 	err := Run(Options{
 		RepoRoot: tmp,
