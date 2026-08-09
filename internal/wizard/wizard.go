@@ -21,6 +21,7 @@ package wizard
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/charmbracelet/huh"
@@ -116,6 +117,30 @@ var (
 	stdin  = os.Stdin
 	stdout = os.Stdout
 )
+
+// formInput and formOutput let tests wire a form's actual keystroke source
+// and render target to something other than the real process's stdin/stdout
+// — a pty, in practice, since bubbletea insists on a term.File to drive raw
+// mode. nil (the default) leaves huh's own default in place, which is
+// os.Stdin/os.Stdout. stdin/stdout above only gate IsInteractive's check;
+// these two are what the form actually reads from and writes to, and in a
+// pty-backed test both pairs need to point at the same tty.
+var (
+	formInput  io.Reader
+	formOutput io.Writer
+)
+
+// withFormIO applies formInput/formOutput to f when a test has set them,
+// leaving huh's defaults (os.Stdin/os.Stdout) alone otherwise.
+func withFormIO(f *huh.Form) *huh.Form {
+	if formInput != nil {
+		f = f.WithInput(formInput)
+	}
+	if formOutput != nil {
+		f = f.WithOutput(formOutput)
+	}
+	return f
+}
 
 // IsInteractive reports whether a form can be shown at all. Both stdin and
 // stdout must be a real terminal, not a pipe, a redirected file, or a
@@ -249,6 +274,8 @@ func Ask(o Options) (Answers, error) {
 				Value(&proceed),
 		),
 	)
+
+	form = withFormIO(form)
 
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {

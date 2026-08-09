@@ -36,6 +36,8 @@ func Review(preview map[scribe.Doc]string) (bool, error) {
 		),
 	)
 
+	form = withFormIO(form)
+
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
 			// Backing out of the review is a "no", not an error — the
