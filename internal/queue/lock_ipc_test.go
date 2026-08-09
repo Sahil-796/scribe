@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
 // This file drives real, separate OS processes against the same repo to
@@ -21,12 +24,134 @@ import (
 const helperEnvVar = "SCRIBE_QUEUE_TEST_HELPER"
 const helperRepoEnvVar = "SCRIBE_QUEUE_TEST_REPO"
 
+// helperActionEnvVar picks which helper behaviour runLockHolderHelper's
+// process dispatches to. Unset (or "lock") preserves the original
+// behaviour so existing callers of startLockHolder need no change; the
+// other actions were added to prove coalescing and no-lost-trigger
+// behaviour under genuine OS-process concurrency (OPEN-ITEMS item 22),
+// which — like the lock itself — cannot be proven with goroutines, since
+// goroutines share one process's file descriptor table and never exercise
+// the cross-process flock/O_EXCL paths this package depends on.
+const helperActionEnvVar = "SCRIBE_QUEUE_TEST_ACTION"
+const helperSessionEnvVar = "SCRIBE_QUEUE_TEST_SESSION"
+
 func TestMain(m *testing.M) {
 	if os.Getenv(helperEnvVar) == "1" {
-		runLockHolderHelper()
+		switch os.Getenv(helperActionEnvVar) {
+		case "enqueue":
+			runEnqueueHelper()
+		case "pending":
+			runSetPendingHelper()
+		case "trylock-hold":
+			runTryLockHoldHelper()
+		default:
+			runLockHolderHelper()
+		}
 		return
 	}
 	os.Exit(m.Run())
+}
+
+// runEnqueueHelper enqueues exactly one trigger for the session named by
+// helperSessionEnvVar into the repo named by helperRepoEnvVar, then exits.
+// Used to prove Enqueue is safe against genuine concurrent OS processes,
+// not just goroutines sharing one process's flock table.
+func runEnqueueHelper() {
+	repo := os.Getenv(helperRepoEnvVar)
+	session := os.Getenv(helperSessionEnvVar)
+	trig := scribe.Trigger{
+		SessionID:      session,
+		TranscriptPath: filepath.Join(repo, "transcript-"+session+".jsonl"),
+		RepoRoot:       repo,
+		EnqueuedAt:     time.Now().UTC(),
+	}
+	if err := Enqueue(repo, trig); err != nil {
+		fmt.Println("ENQUEUE_ERROR:", err)
+		os.Exit(1)
+	}
+	fmt.Println("ENQUEUED")
+}
+
+// runSetPendingHelper sets the pending flag for the repo named by
+// helperRepoEnvVar, then exits. Used to prove SetPending's "idempotent,
+// safe from multiple concurrent processes" contract for real, not just
+// for concurrent goroutines in one process.
+func runSetPendingHelper() {
+	repo := os.Getenv(helperRepoEnvVar)
+	q, err := Open(repo)
+	if err != nil {
+		fmt.Println("OPEN_ERROR:", err)
+		os.Exit(1)
+	}
+	if err := q.SetPending(); err != nil {
+		fmt.Println("PENDING_ERROR:", err)
+		os.Exit(1)
+	}
+	fmt.Println("PENDING_SET")
+}
+
+// holdDurationEnvVar names the env var runTryLockHoldHelper reads to learn
+// how long to hold the lock (as a time.Duration string) before releasing
+// it. Configurable so tests can pick a hold long enough to outlast every
+// racer's exec/start overhead without needlessly slowing the suite down.
+const holdDurationEnvVar = "SCRIBE_QUEUE_TEST_HOLD"
+
+// runTryLockHoldHelper makes a single TryLock attempt against the repo
+// named by helperRepoEnvVar. A loser reports LOST and exits immediately.
+// A winner reports WON, *actually holds the lock* for holdDurationEnvVar
+// (default 300ms) — standing in for the real work a "scribe run" process
+// does between acquiring the lock and releasing it — and then calls
+// Unlock() cleanly before exiting.
+//
+// This is deliberately not the same shape as the old "acquire and exit
+// immediately" helper it replaces. That version made every winner's pid
+// go dead within microseconds of winning, so a second, third, or later
+// racer's isStale() check (info.Hostname == hostname() &&
+// !processAlive(info.PID)) correctly saw a dead holder and correctly
+// reclaimed — repeatedly. That is the intended crash-recovery path
+// (proven deliberately, with a single holder, by
+// TestCrossProcessStaleLockRecoveryOnKill below) doing exactly its job,
+// not a mutual-exclusion violation: each reclaim only ever happened after
+// confirming the previous holder was already dead, so at no single
+// instant did two processes both hold the lock. But it meant a test
+// racing N simultaneous starters against each other never actually raced
+// them against a *live* holder — it raced them against a cascade of
+// instant crashes, which isn't the scenario item 22 asks to prove
+// ("concurrency under real triggers", i.e. contention against a run
+// that's actually in flight). Holding the lock here for a bounded
+// interval well under StaleLockAge makes every loser's TryLock race a
+// genuinely live holder, so "at most one winner" is actually testing
+// mutual exclusion rather than incidentally testing crash recovery.
+func runTryLockHoldHelper() {
+	repo := os.Getenv(helperRepoEnvVar)
+	hold := 300 * time.Millisecond
+	if v := os.Getenv(holdDurationEnvVar); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			hold = d
+		}
+	}
+
+	q, err := Open(repo)
+	if err != nil {
+		fmt.Println("OPEN_ERROR:", err)
+		os.Exit(1)
+	}
+	ok, err := q.TryLock()
+	if err != nil {
+		fmt.Println("LOCK_ERROR:", err)
+		os.Exit(1)
+	}
+	if !ok {
+		fmt.Println("LOST")
+		return
+	}
+	fmt.Println("WON")
+	time.Sleep(hold)
+	if err := q.Unlock(); err != nil {
+		fmt.Println("UNLOCK_ERROR:", err)
+		os.Exit(1)
+	}
+	fmt.Println("RELEASED")
 }
 
 // runLockHolderHelper acquires the run lock for the repo named by
