@@ -618,6 +618,29 @@ func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 	}
 }
 
+// TestBuildDocPromptCorrectionPathGuidance checks phase 03 item 3 actually
+// landed in the prompt text: PROJECT.md's guidance must tell the writer to
+// pull stale claims, and DECISIONS.md's guidance must tell it to record why
+// a decision was dropped, rather than silently deleting the block. The
+// parse/apply path needs no extra support for this beyond what already
+// exists — PROJECT.md and DECISIONS.md are full-replace state docs
+// (docs.WriteState), so a corrected PROJECT.md that simply omits the
+// scrapped claim, or a DECISIONS.md with a new "dropped: ..." block, is
+// just an ordinary WriteState call, not a special case.
+func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
+	entries := []scribe.Entry{{Role: "user", Text: "scrapping the plan"}}
+
+	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries)
+	if !contains(projectPrompt, "normal case") || !contains(projectPrompt, "remove that") {
+		t.Fatalf("PROJECT prompt missing correction-path guidance:\n%s", projectPrompt)
+	}
+
+	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries)
+	if !contains(decisionsPrompt, "dropped") || !contains(decisionsPrompt, "why") {
+		t.Fatalf("DECISIONS prompt missing correction-path guidance:\n%s", decisionsPrompt)
+	}
+}
+
 func TestKeywordPrefilter(t *testing.T) {
 	tests := []struct {
 		text string

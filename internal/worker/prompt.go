@@ -126,16 +126,32 @@ var docPrompts = map[scribe.Doc]docPromptSpec{
 stands. Current state only — no history, no dated entries, that's what
 CHANGELOG.md is for.
 
+The correction path is the normal case, not an edge case (locked decision
+2): if this conversation scraps or supersedes something PROJECT.md
+currently claims, remove that claim now — a later reply is allowed to be
+righter than an earlier one, and PROJECT.md should never keep asserting
+something that's no longer true. You don't need to explain why here; that
+reason belongs in DECISIONS.md, written separately.
+
 Keep it terse — a couple of short paragraphs, not an essay. Someone should
 be able to read the whole thing in under a minute.`,
 	},
 	scribe.DocDecisions: {
 		isState: true,
 		guidance: `You maintain DECISIONS.md: one block per decision, marked active,
-dropped, or superseded. Only write here when something was actually
-chosen, dropped, or superseded. "We used approach X" belongs in
-CHANGELOG.md unless X was genuinely weighed against an alternative and
-picked. Keep each block terse: what was decided, one line why.`,
+dropped, or superseded. Dropping always carries the reason — never delete
+a decision's block outright.
+
+The correction path is the normal case, not an edge case (locked decision
+2): when this conversation drops or supersedes an earlier decision, keep
+that decision's block, mark it dropped (or "superseded by <the new one>"),
+and say why in a line or two. Being wrong and reversing gets recorded, not
+hidden — that record is the point of this file.
+
+Only write here when something was actually chosen, dropped, or
+superseded. "We used approach X" belongs in CHANGELOG.md unless X was
+genuinely weighed against an alternative and picked. Keep each block terse:
+what was decided, one line why, and (when relevant) what it replaced.`,
 	},
 	scribe.DocChangelog: {
 		isState: false,
