@@ -13,33 +13,40 @@ and `.scribe/` on that name; no longer blocking.
 
 ## Needs you — decisions nobody else can make
 
-### 2. Default writing model — plan change awaiting sign-off
+*All four standing decisions were answered on 2026-08-09. The answer to three of them
+was the same: **stop hardcoding, ask at onboarding.** That is now what `scribe init`
+does.*
 
-`PLAN.md` uses `opencode/deepseek-v4-flash-free` as its example. Phase 00 graded it
-third of three: substance right, prose visibly glitched, misspelled a company name.
-**Recommendation: `longcat-2.0-free`.** Someone should confirm before it's baked into
-phase 04's config defaults. See `00-models.md`.
+### 2. RESOLVED — the model is a question, not a constant
 
-### 3. `docs/scribe/` is gitignored — my call, not yours
+The wizard offers the three models phase 00 actually graded, ranked, with the bakeoff's
+winner pre-selected and a free-text option for anything else. `PLAN.md`'s example
+config now says `opencode/longcat-2.0-free` so the plan stops contradicting the code.
+`DefaultModel` remains only as the non-interactive fallback for `--yes` and CI.
 
-I added it to `.gitignore` on day one. `PLAN.md` lists "committed or gitignored" as an
-open question and says "gitignore for the first week regardless," so this matches the
-plan — but it was still my unilateral decision and it sits awkwardly with git being
-the only undo. Revisit before anyone relies on it.
+### 3. RESOLVED — asked at onboarding
 
-### 4. Cross-project content in the bakeoff evidence
+`init` asks whether to commit the docs and records `docsInGit`. `docs/scribe/` is
+gitignored only when the answer is no. `.scribe/` is always ignored — it is local
+state, not a choice.
 
-`experiments/00-model-bakeoff/outputs/` and parts of `00-models.md` are derived from a
-real `scout` session — another private repo of yours. Small, derived summaries, not
-raw transcript, and this repo is private. The full 924-line rendering was removed
-before any push. **Your call whether to scrub the rest.** It's the evidence for the
-gate verdict, so scrubbing costs reviewability.
+### 4. RESOLVED — moot
 
-### 5. Phase 06 file layout — still blocked
+`scout` is public, so the bakeoff evidence was never cross-repo-private content. The
+evidence stays.
 
-Unchanged from `PLAN.md`: options A (one file per session), B (one file per person),
-C (shared, live with conflicts). Nothing in phases 00–01 resolved it. Note that phase
-00's transcript work makes A cheaper than it looked.
+One thing this *does* change: **this repo is going public.** The standing rule that no
+raw transcript content may be committed stops being a courtesy and becomes the actual
+requirement. `.gitignore` already blocks the known pattern and the phase 02 survey
+confirmed the findings docs carry only aggregate counts — worth one deliberate pass
+over `docs/findings/` and `experiments/` before flipping the switch.
+
+### 5. RESOLVED — build both, ask at onboarding
+
+Per-session and shared, chosen per repo at `init` time and recorded as
+`layout: per-session | shared`. Option B (one file per person) is dropped — it is A's
+conflict-freedom with worse readability. Phase 06 builds to whichever the config says;
+the question and the config field shipped in phase 02.
 
 ---
 

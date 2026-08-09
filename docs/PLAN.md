@@ -122,7 +122,7 @@ auto-approve flag.
 ```toml
 [writer]
 agent = "opencode"
-model = "opencode/deepseek-v4-flash-free"
+model = "opencode/longcat-2.0-free"
 ```
 
 Ship with `opencode` first, add `claude`, `codex`, `gemini` as they're needed. A
@@ -176,7 +176,7 @@ that differ per person).
 ```toml
 [writer]
 agent = "opencode"
-model = "opencode/deepseek-v4-flash-free"
+model = "opencode/longcat-2.0-free"
 
 [docs]
 path = "docs/scribe"
@@ -307,10 +307,10 @@ Blocked on the file layout question below.
 
 ## Open questions
 
-### Blocking phase 06 — how teammates write to the same journal
+### Phase 06 layout — SETTLED: build A and C, ask at onboarding
 
 Committed docs mean everyone's scribe appends to the same files: a merge conflict in
-machine-written markdown on nearly every pull.
+machine-written markdown on nearly every pull. The original options:
 
 - **A. One file per session.** `journal/2026-08-08-auth-refactor.md` plus a generated
   index. Two people can't touch the same file, so conflicts are impossible by
@@ -319,10 +319,21 @@ machine-written markdown on nearly every pull.
   grows without limit and reading across people means opening several.
 - **C. Shared files, live with conflicts.** Simplest layout, and the one you'll resent.
 
+**Decision: build A and C, and ask at onboarding which one this repo wants.** It's a
+per-repo question — a solo repo and a shared one want different answers, and neither
+is a sane global default. B is dropped: it's A's conflict-freedom with worse
+readability. `scribe init` records the answer in `.scribe/config.json` as
+`layout: per-session | shared`, and phase 06 builds to whichever is set. The config
+field and the onboarding question shipped in phase 02; the layouts themselves are
+still phase 06's work.
+
+The same reasoning settles whether the docs are committed at all: **ask, don't
+assume.** `init` asks, records `docsInGit`, and gitignores `docs/scribe/` only when
+the answer is no. `.scribe/` is always ignored — it's local state.
+
 ### Not blocking anything
 
-- **The name.** Baked into `docs/scribe/`, so renaming later means moving files in every
-  onboarded repo. Settle before 02.
+- **The name.** SETTLED: `scribe`. Baked into `docs/scribe/` as of phase 02.
 - **Default writing model.** Settle after 00 shows which ones can do the job.
 - **Journal splitting.** One file forever vs per month. Answered for free if the team
   question lands on A.
@@ -357,4 +368,6 @@ per-repo opt-in land in phase 04, before this points at anything real.
 
 ---
 
-*Draft 2 — after the design grilling. Ten decisions locked; name and team layout open.*
+*Draft 2 — after the design grilling. Ten decisions locked. The name is settled
+(`scribe`), and the team layout is settled: build per-session and shared, ask at
+onboarding.*

@@ -24,12 +24,36 @@ const configFileName = "config.json"
 var ErrNotInitialised = errors.New("install: repo not initialised (run `scribe init`)")
 
 // Config is the per-repo configuration scribe init records.
+//
+// DocsInGit and Layout exist because both are genuinely per-repo choices
+// that scribe has no business making globally (OPEN-ITEMS items 3 and 5): a
+// solo repo and a shared one want different answers, and whether generated
+// docs belong in git is the owner's call, not the tool's. init asks both at
+// onboarding and records the answers here.
 type Config struct {
 	Agent   string `json:"agent"`   // e.g. "opencode"
-	Model   string `json:"model"`   // e.g. "longcat-2.0-free"
+	Model   string `json:"model"`   // e.g. "opencode/longcat-2.0-free"
 	DocsDir string `json:"docsDir"` // defaults to scribe.DocsDir
 	Enabled bool   `json:"enabled"`
+
+	// DocsInGit is true when the docs are committed to the repo, false when
+	// init added them to .gitignore instead.
+	DocsInGit bool `json:"docsInGit"`
+
+	// Layout is "per-session" (each session writes its own file, no write
+	// conflicts) or "shared" (the four docs as single appended files).
+	// Consumed by phase 06; recorded from onboarding so the answer exists
+	// before the code that reads it does.
+	Layout string `json:"layout"`
 }
+
+// Layout values recorded in Config.Layout. They mirror internal/wizard's
+// Layout constants, kept as plain strings here so this package stays free
+// of a dependency on the TUI package.
+const (
+	LayoutPerSession = "per-session"
+	LayoutShared     = "shared"
+)
 
 // configPath returns the path WriteConfig/ReadConfig use for repoRoot.
 func configPath(repoRoot string) string {
