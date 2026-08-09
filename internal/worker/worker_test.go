@@ -607,9 +607,9 @@ func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries)
 
 	leaks := []string{
-		"one block per decision",    // DECISIONS guidance
-		"who it's for, where it",    // PROJECT guidance
-		"AI got\nconfidently wrong", // JOURNAL guidance
+		"one block per decision",   // DECISIONS guidance
+		"who it's for, where it",   // PROJECT guidance
+		"AI got confidently wrong", // JOURNAL guidance
 	}
 	for _, l := range leaks {
 		if contains(prompt, l) {
@@ -638,6 +638,29 @@ func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
 	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries)
 	if !contains(decisionsPrompt, "dropped") || !contains(decisionsPrompt, "why") {
 		t.Fatalf("DECISIONS prompt missing correction-path guidance:\n%s", decisionsPrompt)
+	}
+}
+
+// TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing pins down
+// phase 03 item 4: JOURNAL.md's guidance must distinguish what it wants
+// (problems hit, AI mistakes, dead ends, the fix) from what it doesn't
+// (a tool-call narration, a changelog restatement), with concrete examples
+// of each — not just a one-line description a model can satisfy with
+// filler.
+func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
+	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
+	prompt := buildDocPrompt(scribe.DocJournal, "current", entries)
+
+	for _, want := range []string{
+		"confidently wrong", // what it wants
+		"dead ends",
+		"Good entry", // a concrete example of each
+		"Bad entry",
+		"quiet session", // permission to write nothing when there's nothing
+	} {
+		if !contains(prompt, want) {
+			t.Fatalf("JOURNAL prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

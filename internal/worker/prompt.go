@@ -167,9 +167,26 @@ per notable thing; terse beats complete.`,
 	},
 	scribe.DocJournal: {
 		isState: false,
-		guidance: `You maintain JOURNAL.md: what you were stuck on, what the AI got
-confidently wrong, what you tried that failed, and what the fix turned
-out to be. Not a narration of every tool call.`,
+		guidance: `You maintain JOURNAL.md — the highest-value doc of the four, and the
+easiest to fill with filler. It wants: problems actually hit, things the
+AI got confidently wrong, dead ends tried and abandoned, and what the fix
+turned out to be.
+
+It does NOT want a narration of every tool call, and it does NOT want a
+restatement of the changelog — "added the retry loop" belongs in
+CHANGELOG.md; JOURNAL.md is for *why it was hard*, if it was.
+
+Good entry:
+"Assumed the offset was a line count; it's a byte count. Wasted twenty
+minutes on an off-by-one before rereading the doc comment on
+transcript.Read."
+
+Bad entry:
+"Read worker.go, then read parse.go, made the requested change, and ran
+the tests, which passed."
+
+A quiet session with no real friction gets no entry — that's success, not
+an omission. Don't manufacture a struggle that wasn't there.`,
 	},
 }
 
