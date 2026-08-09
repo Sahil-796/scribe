@@ -252,3 +252,73 @@ func TestEntryOpeningWithItalicBlockquoteIsNotAnArchivePointer(t *testing.T) {
 		t.Fatal("a real archive pointer was not recognised")
 	}
 }
+
+// Rotation pointers are never themselves rotated, so before they were
+// coalesced every rotation permanently spent a little more of the live
+// doc's size cap on bookkeeping. A doc that rotates often would end up
+// over its cap purely from pointer blocks, which defeats the point of
+// having a cap at all.
+func TestRepeatedRotationsIntoOneArchiveKeepASinglePointer(t *testing.T) {
+	s := mustOpen(t)
+	fixed := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return fixed }
+
+	title, _ := parseHistoryDoc(mustRead(t, s, scribe.DocChangelog))
+	s.SetCaps(0, sizeAfter(title, strings.Repeat("A", 120), strings.Repeat("B", 120)))
+
+	for i := 0; i < 25; i++ {
+		if err := s.AppendHistory(scribe.DocChangelog, strings.Repeat(string(rune('a'+i%26)), 120)); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+
+	_, blocks := parseHistoryDoc(mustRead(t, s, scribe.DocChangelog))
+	pointers := 0
+	total := 0
+	for _, b := range blocks {
+		if n, _, ok := parseArchivePointer(b); ok {
+			pointers++
+			total += n
+		}
+	}
+	if pointers != 1 {
+		t.Fatalf("25 appends into one month left %d pointer blocks, want exactly 1", pointers)
+	}
+	if total == 0 {
+		t.Fatal("the surviving pointer records no archived entries")
+	}
+}
+
+// A rotation into a different month is a different archive file and must
+// get its own pointer rather than corrupting the previous month's count.
+func TestRotationInANewMonthAddsASecondPointer(t *testing.T) {
+	s := mustOpen(t)
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	s.Now = func() time.Time { return now }
+
+	title, _ := parseHistoryDoc(mustRead(t, s, scribe.DocChangelog))
+	s.SetCaps(0, sizeAfter(title, strings.Repeat("A", 120), strings.Repeat("B", 120)))
+
+	for i := 0; i < 6; i++ {
+		if err := s.AppendHistory(scribe.DocChangelog, strings.Repeat("x", 120)); err != nil {
+			t.Fatalf("july append %d: %v", i, err)
+		}
+	}
+	now = time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 6; i++ {
+		if err := s.AppendHistory(scribe.DocChangelog, strings.Repeat("y", 120)); err != nil {
+			t.Fatalf("august append %d: %v", i, err)
+		}
+	}
+
+	_, blocks := parseHistoryDoc(mustRead(t, s, scribe.DocChangelog))
+	paths := map[string]int{}
+	for _, b := range blocks {
+		if n, p, ok := parseArchivePointer(b); ok {
+			paths[p] = n
+		}
+	}
+	if len(paths) != 2 {
+		t.Fatalf("rotations across two months left pointers for %d archives, want 2: %v", len(paths), paths)
+	}
+}

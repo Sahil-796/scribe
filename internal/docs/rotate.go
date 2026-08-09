@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,7 +47,13 @@ const blockSep = "\n\n<!-- scribe:entry -->\n\n"
 // blockSep it is invisible when rendered, so the pointer's visible text
 // stays plain prose while the machine-readable part can't be produced by
 // accident.
-const archivePointerMarker = "<!-- scribe:archived -->"
+//
+// The marker also carries the pointer's data (how many entries, which
+// archive file) as attributes, so a later rotation into the same archive
+// can find its own pointer and update it in place rather than appending a
+// second one. Parsing the visible prose instead would mean a rendering
+// tweak silently breaking coalescing.
+const archivePointerMarker = "<!-- scribe:archived"
 
 // serializeHistoryDoc renders a history doc's title line plus its ordered
 // blocks back into on-disk text. It is parseHistoryDoc's inverse.
@@ -89,7 +96,53 @@ func archivePointerText(n int, relPath string) string {
 	if n != 1 {
 		noun = "entries"
 	}
-	return fmt.Sprintf("%s\n> _%d earlier %s archived to [%s](%s) to stay under the size cap._", archivePointerMarker, n, noun, relPath, relPath)
+	return fmt.Sprintf("%s count=%d path=%s -->\n> _%d earlier %s archived to [%s](%s) to stay under the size cap._",
+		archivePointerMarker, n, relPath, n, noun, relPath, relPath)
+}
+
+// parseArchivePointer reads back what archivePointerText encoded. Returns
+// ok=false for anything that isn't a pointer block.
+func parseArchivePointer(block string) (n int, relPath string, ok bool) {
+	if !isArchivePointer(block) {
+		return 0, "", false
+	}
+	end := strings.Index(block, "-->")
+	if end < 0 {
+		return 0, "", false
+	}
+	for _, f := range strings.Fields(block[len(archivePointerMarker):end]) {
+		switch {
+		case strings.HasPrefix(f, "count="):
+			v, err := strconv.Atoi(strings.TrimPrefix(f, "count="))
+			if err != nil {
+				return 0, "", false
+			}
+			n = v
+		case strings.HasPrefix(f, "path="):
+			relPath = strings.TrimPrefix(f, "path=")
+		}
+	}
+	return n, relPath, relPath != ""
+}
+
+// mergePointer folds a rotation of n entries into relPath into the existing
+// pointer blocks, updating the matching pointer's count in place if there
+// already is one and appending a new pointer otherwise.
+//
+// Without this, every rotation appends a pointer that is never itself
+// rotated, so the live doc permanently spends part of its size cap on
+// bookkeeping — a doc that rotates often ends up over cap purely from
+// pointers, which defeats the cap. Archives group by calendar month, so in
+// steady state this keeps the count at one pointer per month.
+func mergePointer(pointers []string, n int, relPath string) []string {
+	for i, p := range pointers {
+		if existing, path, ok := parseArchivePointer(p); ok && path == relPath {
+			merged := append([]string{}, pointers...)
+			merged[i] = archivePointerText(existing+n, relPath)
+			return merged
+		}
+	}
+	return append(append([]string{}, pointers...), archivePointerText(n, relPath))
 }
 
 // SplitBlocks exposes parseHistoryDoc's title/blocks split to callers
@@ -188,8 +241,7 @@ func (s *Store) rotateHistory(doc scribe.Doc, title string, blocks []string) ([]
 		return nil, err
 	}
 
-	pointer := archivePointerText(len(archived), s.archiveRelPath(doc, s.now()))
-	kept := append(pointerBlocks, pointer)
+	kept := mergePointer(pointerBlocks, len(archived), s.archiveRelPath(doc, s.now()))
 	kept = append(kept, entries...)
 	return kept, nil
 }

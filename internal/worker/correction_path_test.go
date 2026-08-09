@@ -13,6 +13,8 @@ package worker
 // not trying, because it silently drops a claim with no recorded reason).
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/Sahil-796/scribe/internal/scribe"
@@ -71,21 +73,17 @@ func TestCorrectionPathBothHalvesFireUpdatesProjectAndRecordsReason(t *testing.T
 	}
 }
 
-// TestCorrectionPathOnlyProjectFiresDropsClaimWithNoRecordedReason
-// characterises — does NOT fix — the half-fire case OPEN-ITEMS item 29
-// warns about: the PROJECT call decides something is stale and rewrites it
-// away, but the independent DECISIONS call doesn't reach the same
-// conclusion and answers NO_CHANGE. There is nothing in worker.go that
-// notices the two calls disagreed; each runDocWriter call is applied (or
-// not) entirely on its own.
+// The half-fire case from OPEN-ITEMS item 29: the PROJECT call decides
+// something is stale and rewrites it away, and the DECISIONS call still
+// answers NO_CHANGE despite being told what PROJECT did.
 //
-// Today's actual behaviour, pinned here: the run succeeds, PROJECT loses
-// the claim, and DECISIONS is left completely untouched — no new block, no
-// recorded reason, no error, no log line. Per docs/PLAN.md this is exactly
-// the "worse than not trying" outcome item 29 describes: a claim vanishes
-// from PROJECT.md and nothing anywhere says why. The fix, if one is wanted,
-// is item 29's suggested one — passing all four docs' current content into
-// every call — not something this test asserts should happen instead.
+// DECISIONS now receives projectRewriteNotice, so this is no longer the
+// blind disagreement item 29 described — but a writer is still free to
+// decline, and the run must not fail over it: the CHANGELOG/JOURNAL work is
+// real and replaying the transcript bytes would help nobody. What must NOT
+// happen is silence. This pins both halves of that: the run still succeeds
+// and the offset still advances, and the drop is reported on Deps.Log so it
+// is visible rather than invisible.
 func TestCorrectionPathOnlyProjectFiresDropsClaimWithNoRecordedReason(t *testing.T) {
 	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
 		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
@@ -109,13 +107,14 @@ func TestCorrectionPathOnlyProjectFiresDropsClaimWithNoRecordedReason(t *testing
 		noChangeSentinel, // ...DECISIONS call independently does not
 	}}
 
+	var log bytes.Buffer
 	deps := Deps{
-		Queue: q, Docs: store, Writer: w,
+		Queue: q, Docs: store, Writer: w, Log: &log,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
 	}
 
 	if err := Run(deps); err != nil {
-		t.Fatalf("Run: %v (a half-fired correction is not an error today — that's the point being characterised)", err)
+		t.Fatalf("Run: %v (a declined DECISIONS entry is not a failed run)", err)
 	}
 
 	if store.state[scribe.DocProject] != correctedProject {
@@ -125,10 +124,22 @@ func TestCorrectionPathOnlyProjectFiresDropsClaimWithNoRecordedReason(t *testing
 		t.Fatalf("DECISIONS unexpectedly changed — this test characterises the case where it stays silent, got %q, want unchanged %q",
 			store.state[scribe.DocDecisions], originalDecisions)
 	}
-	// The offset still advances: nothing about a half-fired correction looks
-	// like a failure to runOnce, because nothing checks the two calls
-	// against each other. That's the exact silence item 29 is about.
+	// The offset still advances — a declined DECISIONS entry is not a
+	// failed run, and replaying these bytes would not change the outcome.
 	if got := tr.offsets["s1"]; got != int64(len(correctionEntries)) {
-		t.Fatalf("expected offset to advance despite the half-fired correction (today's behaviour), got %d", got)
+		t.Fatalf("expected offset to advance despite the half-fired correction, got %d", got)
+	}
+	// The part that actually matters: it must not be silent.
+	if !strings.Contains(log.String(), "item 29") {
+		t.Fatalf("a dropped claim with no recorded reason must be reported, got log: %q", log.String())
+	}
+
+	// And DECISIONS must have been told what PROJECT did — otherwise it was
+	// declining blind, which is the condition item 29 was actually about.
+	if len(w.prompts) < 5 || !strings.Contains(w.prompts[4], "PROJECT.md was rewritten earlier in this same run") {
+		t.Fatal("the DECISIONS call was not given PROJECT.md's rewrite context")
+	}
+	if !strings.Contains(w.prompts[4], originalProject) {
+		t.Fatal("the DECISIONS call was not shown PROJECT.md's previous content")
 	}
 }

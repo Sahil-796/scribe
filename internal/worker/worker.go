@@ -390,9 +390,42 @@ func collectEdits(deps Deps, current map[scribe.Doc]string, entries []scribe.Ent
 	if err != nil {
 		errs = append(errs, err)
 	} else if gateIn {
-		for _, d := range projectAndDecisions {
-			if err := runDocWriter(deps, d, current, entries, result); err != nil {
-				errs = append(errs, err)
+		// PROJECT first, then DECISIONS — deliberately ordered, not a loop.
+		// The correction path is one obligation split across two calls
+		// (drop the claim, record why), so DECISIONS has to be told what
+		// PROJECT just did or it answers NO_CHANGE in good faith and the
+		// claim vanishes unexplained. See projectRewriteNotice.
+		if err := runDocWriter(deps, scribe.DocProject, current, entries, result); err != nil {
+			errs = append(errs, err)
+		}
+
+		extra := ""
+		if after, rewritten := result[scribe.DocProject]; rewritten {
+			extra = projectRewriteNotice(current[scribe.DocProject], after)
+		}
+		if err := runDocWriterWithContext(deps, scribe.DocDecisions, current, entries, extra, result); err != nil {
+			errs = append(errs, err)
+		}
+
+		// Last line of defence. The gate only says YES when something was
+		// actually chosen, dropped, or superseded, so PROJECT being
+		// rewritten while DECISIONS declines is genuinely suspicious: the
+		// most likely reading is a claim changed and its reason went
+		// unrecorded.
+		//
+		// Deliberately not a size comparison. The obvious heuristic —
+		// "PROJECT got shorter" — is wrong, because a rewrite that drops a
+		// claim routinely produces *longer* text ("Syncs on every save" ->
+		// "No longer syncs on save"). We can't tell from the bytes whether
+		// something was lost, and pretending otherwise would give a
+		// confident answer to a question we can't answer.
+		//
+		// Not a failure either: the CHANGELOG/JOURNAL work is real and
+		// replaying the transcript wouldn't change the writer's mind. It
+		// just must not be silent.
+		if _, rewritten := result[scribe.DocProject]; rewritten {
+			if _, recorded := result[scribe.DocDecisions]; !recorded {
+				deps.logf("worker: PROJECT.md was rewritten on a product-level run and DECISIONS.md recorded nothing — a claim may have been dropped without a reason (OPEN-ITEMS item 29)\n")
 			}
 		}
 	}
@@ -427,7 +460,14 @@ func gateProductLevel(deps Deps, entries []scribe.Entry) (bool, error) {
 // runDocWriter makes one writer call for doc d and, if it came back with a
 // real change (not noChangeSentinel), records it into result.
 func runDocWriter(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entries []scribe.Entry, result edits) error {
-	prompt := buildDocPrompt(d, current[d], entries, deps.codeWeight())
+	return runDocWriterWithContext(deps, d, current, entries, "", result)
+}
+
+// runDocWriterWithContext is runDocWriter with extra prompt text appended
+// after the standard per-doc prompt. Only the correction path uses it, to
+// tell DECISIONS.md what PROJECT.md just changed; everything else passes "".
+func runDocWriterWithContext(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entries []scribe.Entry, extra string, result edits) error {
+	prompt := buildDocPrompt(d, current[d], entries, deps.codeWeight()) + extra
 	out, err := deps.Writer.Run(prompt)
 	if err != nil {
 		return fmt.Errorf("worker: writer run for %s: %w", d, err)

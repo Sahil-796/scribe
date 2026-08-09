@@ -263,3 +263,38 @@ fence, no explanation before or after.
 
 	return b.String()
 }
+
+// projectRewriteNotice is appended to DECISIONS.md's prompt when PROJECT.md
+// was rewritten earlier in the same run.
+//
+// Every per-doc call is otherwise blind to the others, which is fine for
+// three of the four docs and wrong for this pair. The correction path is a
+// single obligation split across two calls: PROJECT drops a claim, and
+// DECISIONS records why it was dropped. Asked independently, the DECISIONS
+// call has no way to know a drop happened, so it answers NO_CHANGE in good
+// faith and the claim vanishes with no reason recorded — which docs/PLAN.md
+// treats as a bug ("being wrong and reversing is recorded, not hidden"),
+// and which is strictly worse than never having tried.
+//
+// Handing DECISIONS the before and after of PROJECT is the minimum context
+// that makes the obligation answerable. It costs nothing when PROJECT
+// didn't change, because then this isn't appended at all.
+func projectRewriteNotice(before, after string) string {
+	var b strings.Builder
+	b.WriteString(`
+
+--- IMPORTANT: PROJECT.md was rewritten earlier in this same run ---
+Compare the two versions below. If anything was removed, reversed, or
+narrowed — a claim dropped, a plan abandoned, a decision superseded —
+DECISIONS.md MUST record what changed and why, taking its reason from the
+conversation above. A claim disappearing from PROJECT.md with no
+corresponding DECISIONS.md entry is the one outcome to avoid.
+
+If PROJECT.md only gained new content and nothing was dropped or reversed,
+this needs no DECISIONS entry on its own.
+
+`)
+	fmt.Fprintf(&b, "--- PROJECT.md before this run ---\n%s\n", before)
+	fmt.Fprintf(&b, "\n--- PROJECT.md after this run ---\n%s\n", after)
+	return b.String()
+}
