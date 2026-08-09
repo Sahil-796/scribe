@@ -1,0 +1,45 @@
+{
+  "comment": "Corpus items are byte-exact slices of real transcripts from THIS repo's own Claude Code sessions, stored under ~/.claude/projects/<mangled-repo-path>/<session>.jsonl. Not committed (see README): only session id + line/byte range, so a run is reproducible on this machine without carrying raw transcript content into git. line numbers are 1-indexed and inclusive; byte ranges are the exact [from,to) slice runner.go reads and are what actually gets fed to internal/transcript.Read — regenerate them with scripts/offsets.py if the source files ever change.",
+  "items": [
+    {
+      "name": "engineering",
+      "session": "bb08da3b-2a42-439a-849f-1f61d0fe65ce.jsonl",
+      "from_line": 246,
+      "to_line": 270,
+      "from_byte": 719207,
+      "to_byte": 757507,
+      "shape": "pure engineering",
+      "description": "Fixing OPEN-ITEMS one by one; init runs against real opencode and immediately turns up a real bug (claims it wrote four docs, only created two). Concrete problem, concrete fix, no product discussion."
+    },
+    {
+      "name": "product",
+      "session": "49a69d04-31fe-448c-becc-2ac6e629a8df.jsonl",
+      "from_line": 53,
+      "to_line": 76,
+      "from_byte": 123123,
+      "to_byte": 173775,
+      "shape": "product-level discussion",
+      "description": "Design conversation about what scribe is at its core and what should trigger a run. No code touched, but real product decisions get made (transcript-compiler framing, Stop-hook-per-reply as the trigger) — the kind of thing DECISIONS.md/PROJECT.md should pick up and CHANGELOG/JOURNAL should not."
+    },
+    {
+      "name": "reversal",
+      "session": "cc677ff6-866b-40d6-92bd-614fe67ac2f8.jsonl",
+      "from_line": 204,
+      "to_line": 238,
+      "from_byte": 480281,
+      "to_byte": 526096,
+      "shape": "visible correction/reversal",
+      "description": "Assistant claims PRs are stacked, user pushes back, assistant explicitly self-corrects ('Correction: they aren't stacked. They're siblings... I described them as stacked earlier; that was wrong.'). Tests whether the writer records the correction honestly instead of just the final state."
+    },
+    {
+      "name": "deadend",
+      "session": "49a69d04-31fe-448c-becc-2ac6e629a8df.jsonl",
+      "from_line": 79,
+      "to_line": 101,
+      "from_byte": 174118,
+      "to_byte": 198146,
+      "shape": "dead end / abandoned idea",
+      "description": "'Files changed' as the unit of what a session did gets proposed, then explicitly scrapped by the user for not covering discussion-only sessions ('scrap files changed as the point'), in favor of tracking problems/decisions instead. Tests whether the writer notices an idea was raised and dropped, and records why, instead of writing it up as if it shipped."
+    }
+  ]
+}
