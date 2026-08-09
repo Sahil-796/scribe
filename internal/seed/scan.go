@@ -5,12 +5,12 @@
 // The seed pass only looks at facts already sitting in the repo — README,
 // package manifests, a pruned directory tree, and any docs already checked
 // in — and hands them to the same kind of writer agent the live loop uses
-// (internal/worker), via the same prompt/parse contract (fenced JSON
-// object, keys are scribe.Doc names). Run never writes a file: init is a
-// dry run by default (docs/PLAN.md, phase 02: "Dry run by default, writing
-// somewhere readable before it touches the repo"), so the decision to
-// commit the seeded content belongs to the caller (cmd/, out of scope
-// here), not to this package.
+// (internal/worker), one call per doc: see ProjectPrompt/DecisionsPrompt
+// and ParseProject/ParseDecisions in prompt.go/parse.go. Run never writes a
+// file: init is a dry run by default (docs/PLAN.md, phase 02: "Dry run by
+// default, writing somewhere readable before it touches the repo"), so the
+// decision to commit the seeded content belongs to the caller (cmd/, out of
+// scope here), not to this package.
 package seed
 
 import (

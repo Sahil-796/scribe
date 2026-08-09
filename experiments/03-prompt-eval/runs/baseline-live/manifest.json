@@ -1,0 +1,24 @@
+[
+  {
+    "corpus": "engineering",
+    "variant": "baseline.md",
+    "agent": "opencode",
+    "model": "opencode/longcat-2.0-free",
+    "entry_count": 5,
+    "prompt_file": "/Users/sahil/work/pa/experiments/03-prompt-eval/runs/baseline-live/engineering.prompt.txt",
+    "output_file": "/Users/sahil/work/pa/experiments/03-prompt-eval/runs/baseline-live/engineering.out.txt",
+    "duration_ns": 38151290916,
+    "started_at": "2026-08-09T14:18:09Z"
+  },
+  {
+    "corpus": "reversal",
+    "variant": "baseline.md",
+    "agent": "opencode",
+    "model": "opencode/longcat-2.0-free",
+    "entry_count": 10,
+    "prompt_file": "/Users/sahil/work/pa/experiments/03-prompt-eval/runs/baseline-live/reversal.prompt.txt",
+    "output_file": "/Users/sahil/work/pa/experiments/03-prompt-eval/runs/baseline-live/reversal.out.txt",
+    "duration_ns": 42072000000,
+    "started_at": "2026-08-09T14:17:16Z"
+  }
+]

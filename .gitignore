@@ -13,3 +13,6 @@ docs/scribe/
 
 # phase 00: never commit rendered transcripts
 experiments/00-model-bakeoff/cleaned_transcript*.md
+
+# phase 03: rendered eval prompts embed real transcript turns
+experiments/03-prompt-eval/runs/**/*.prompt.txt

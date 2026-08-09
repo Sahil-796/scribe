@@ -1,8 +1,10 @@
 package worker
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -200,6 +202,9 @@ func (f *fakeTranscript) SaveOffset(repoRoot string, o scribe.Offset) error {
 
 // ---- tests ----
 
+// "hello" contains none of gateKeywords, so the gate's keyword prefilter
+// skips the classification call and PROJECT/DECISIONS entirely — a run
+// like this costs exactly two writer calls: CHANGELOG, then JOURNAL.
 func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
 		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
@@ -208,7 +213,7 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
 
 	store := newFakeDocStore()
-	w := &fakeWriter{outputs: []string{`{"CHANGELOG.md": "did a thing"}`}}
+	w := &fakeWriter{outputs: []string{"did a thing", noChangeSentinel}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -227,6 +232,9 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	}
 	if q.lockCalls != 1 || q.unlockCalls != 1 {
 		t.Fatalf("expected exactly one lock/unlock cycle, got lock=%d unlock=%d", q.lockCalls, q.unlockCalls)
+	}
+	if w.calls != 2 {
+		t.Fatalf("expected exactly 2 writer calls (CHANGELOG, JOURNAL — no gate keyword, so PROJECT/DECISIONS skipped), got %d", w.calls)
 	}
 }
 
@@ -269,7 +277,7 @@ func TestOffsetDoesNotAdvanceWhenDocWriteFails(t *testing.T) {
 
 	store := newFakeDocStore()
 	store.writeErr = errors.New("disk full")
-	w := &fakeWriter{outputs: []string{`{"CHANGELOG.md": "did a thing"}`}}
+	w := &fakeWriter{outputs: []string{"did a thing", noChangeSentinel}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -298,13 +306,15 @@ func TestRunReRunsWhenPendingFlagIsSet(t *testing.T) {
 	}
 
 	store := newFakeDocStore()
+	// Each runOnce makes two calls with no gate keyword present (CHANGELOG,
+	// then JOURNAL), so two runOnce iterations cost four calls total.
 	w := &fakeWriter{outputs: []string{
-		`{"CHANGELOG.md": "covered first"}`,
-		`{"CHANGELOG.md": "covered second"}`,
+		"covered first", noChangeSentinel,
+		"covered second", noChangeSentinel,
 	}}
 
 	// Simulate a trigger landing mid-run: runOnce always calls the writer
-	// after draining, so on the writer's first call we both flip the
+	// after draining, so on the writer's very first call we both flip the
 	// pending flag AND append a new transcript entry — that's what a Stop
 	// hook firing mid-run actually looks like: a new reply appears, plus a
 	// trigger gets queued for it. Without a new entry, the second runOnce
@@ -410,7 +420,7 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	tr := newFakeTranscript()
 	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
 	store := newFakeDocStore()
-	w := &fakeWriter{outputs: []string{`{"CHANGELOG.md": "one entry"}`}}
+	w := &fakeWriter{outputs: []string{"one entry", noChangeSentinel}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -420,80 +430,135 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	if err := Run(deps); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if w.calls != 1 {
-		t.Fatalf("expected exactly one writer call for one coalesced batch, got %d", w.calls)
+	// Coalescing means one read of the new bytes, not one writer call — this
+	// run still makes one call per doc in play (CHANGELOG, JOURNAL; no gate
+	// keyword here). What coalescing buys is a single offset save below,
+	// not a single writer call.
+	if w.calls != 2 {
+		t.Fatalf("expected exactly 2 writer calls (CHANGELOG, JOURNAL) for one coalesced batch, got %d", w.calls)
 	}
 	if len(tr.saveCalls) != 1 {
 		t.Fatalf("expected exactly one offset save for the one session, got %d", len(tr.saveCalls))
 	}
 }
 
-// TestRunFailsWhenWriterMakesNoChange pins down open item 8
-// (docs/findings/OPEN-ITEMS.md, docs/findings/00-writer.md): `opencode run`
-// without `--auto` auto-rejects every edit and still exits 0 with
-// normal-looking JSON. A writer that returns success but changes nothing
-// must be treated as a failure, not silently accepted, or scribe can report
-// success forever while writing nothing at all.
-//
-// Two shapes of "nothing changed" are covered: the writer's output parses
-// to zero edits, and the writer's output parses to edits but the content is
-// byte-identical to what's already on disk (e.g. it echoed the doc back
-// unchanged).
-func TestRunFailsWhenWriterMakesNoChange(t *testing.T) {
-	tests := []struct {
-		name         string
-		writerOutput string
-		preexisting  map[scribe.Doc]string // seeded into store.state before Run
-	}{
-		{
-			name:         "writer output parses to zero edits",
-			writerOutput: `{}`,
-		},
-		{
-			name:         "writer output parses to edits identical to current content",
-			writerOutput: `{"PROJECT.md": "unchanged content"}`,
-			preexisting:  map[scribe.Doc]string{scribe.DocProject: "unchanged content"},
-		},
+// TestRunSucceedsWhenEveryDocDeclines covers the case phase 03 makes
+// common: every per-doc call legitimately answers noChangeSentinel. This
+// must NOT be treated as a failure — unlike phase 01's single combined
+// prompt, where "the writer changed nothing" was itself suspicious,
+// per-doc calls are allowed to decline, and a quiet run declining
+// everything is the expected outcome, not evidence of a broken writer. The
+// offset still advances so this transcript slice isn't reprocessed next
+// run.
+func TestRunSucceedsWhenEveryDocDeclines(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{outputs: []string{noChangeSentinel, noChangeSentinel}}
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			q := &fakeQueue{drainQueue: [][]scribe.Trigger{
-				{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
-			}}
-			tr := newFakeTranscript()
-			tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
-
-			store := newFakeDocStore()
-			for d, v := range tt.preexisting {
-				store.state[d] = v
-			}
-			w := &fakeWriter{outputs: []string{tt.writerOutput}}
-
-			deps := Deps{
-				Queue: q, Docs: store, Writer: w,
-				ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-			}
-
-			if err := Run(deps); err == nil {
-				t.Fatal("expected Run to fail when the writer changed nothing")
-			}
-
-			if got := tr.offsets["s1"]; got != 0 {
-				t.Fatalf("offset must not advance when nothing changed, got %d", got)
-			}
-			if len(tr.saveCalls) != 0 {
-				t.Fatalf("SaveOffset must not be called when nothing changed, got %d calls", len(tr.saveCalls))
-			}
-		})
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run: expected success when every doc declines, got %v", err)
+	}
+	if got := tr.offsets["s1"]; got != 1 {
+		t.Fatalf("expected offset to still advance on a legitimately quiet run, got %d", got)
+	}
+	for _, d := range scribe.AllDocs {
+		if len(store.history[d]) != 0 {
+			t.Fatalf("expected no history entries for %s, got %v", d, store.history[d])
+		}
 	}
 }
 
-// TestRunNoNewTranscriptEntriesIsNotAFailure is the counterpart to
-// TestRunFailsWhenWriterMakesNoChange: a trigger fires but the transcript
-// has no new bytes since the last offset. "Nothing changed" here is
-// legitimate (there was nothing to say), not the writer swallowing an
-// edit, so the writer must not even be called and Run must not error.
+// TestRunFailsWhenWriterEchoesUnchangedContent pins down open item 8
+// (docs/findings/OPEN-ITEMS.md, docs/findings/00-writer.md): `opencode run`
+// without `--auto` auto-rejects every edit the model attempts and still
+// exits 0 with normal-looking output. A state-doc call that claims a
+// change (returns something other than noChangeSentinel) but whose content
+// is byte-identical to what's already on disk is exactly that failure mode
+// wearing a disguise, and must be treated as an error, not silently
+// accepted.
+//
+// This needs a gated-in PROJECT/DECISIONS call to exercise, since
+// CHANGELOG/JOURNAL are history docs — AppendHistory always grows the
+// file, so an "identical" entry still changes the doc on disk. Only a
+// state doc's WriteState can produce a byte-for-byte no-op, so the entry
+// text below deliberately trips the gate keyword prefilter.
+func TestRunFailsWhenWriterEchoesUnchangedContent(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "we decided to go with plan B"}}
+
+	store := newFakeDocStore()
+	store.state[scribe.DocProject] = "existing content"
+	w := &fakeWriter{outputs: []string{
+		noChangeSentinel,   // CHANGELOG
+		noChangeSentinel,   // JOURNAL
+		"YES",              // gate classification ("decided" tripped the prefilter)
+		"existing content", // PROJECT — echoed back unchanged
+		noChangeSentinel,   // DECISIONS
+	}}
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err == nil {
+		t.Fatal("expected Run to fail when a state doc call echoes unchanged content")
+	}
+	if got := tr.offsets["s1"]; got != 0 {
+		t.Fatalf("offset must not advance when nothing actually changed, got %d", got)
+	}
+	if len(tr.saveCalls) != 0 {
+		t.Fatalf("SaveOffset must not be called when nothing actually changed, got %d calls", len(tr.saveCalls))
+	}
+}
+
+// TestRunFailsWhenDocWriterReturnsEmptyOutput checks the other half of the
+// noChangeSentinel contract: a blank response isn't a considered "nothing
+// to say", it's parseDocOutput refusing to guess. Every per-doc prompt
+// always asks for either real content or the literal sentinel, so nothing
+// at all means something went wrong upstream, and that must surface as an
+// error rather than being swallowed as equivalent to NO_CHANGE.
+func TestRunFailsWhenDocWriterReturnsEmptyOutput(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{outputs: []string{""}} // CHANGELOG call returns nothing at all
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err == nil {
+		t.Fatal("expected Run to fail on an empty (non-sentinel) writer response")
+	}
+	if got := tr.offsets["s1"]; got != 0 {
+		t.Fatalf("offset must not advance on a parse failure, got %d", got)
+	}
+}
+
+// TestRunNoNewTranscriptEntriesIsNotAFailure is the counterpart to the
+// no-change tests above: a trigger fires but the transcript has no new
+// bytes since the last offset. "Nothing changed" here is legitimate (there
+// was nothing to say), not the writer swallowing an edit, so the writer
+// must not even be called and Run must not error.
 func TestRunNoNewTranscriptEntriesIsNotAFailure(t *testing.T) {
 	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
 		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
@@ -503,7 +568,7 @@ func TestRunNoNewTranscriptEntriesIsNotAFailure(t *testing.T) {
 	// the transcript hasn't grown since the last run.
 
 	store := newFakeDocStore()
-	w := &fakeWriter{outputs: []string{`{"CHANGELOG.md": "should not be called"}`}}
+	w := &fakeWriter{outputs: []string{"should not be called"}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -521,21 +586,197 @@ func TestRunNoNewTranscriptEntriesIsNotAFailure(t *testing.T) {
 	}
 }
 
-func TestBuildPromptIncludesDocsAndEntries(t *testing.T) {
-	current := map[scribe.Doc]string{
-		scribe.DocProject:   "proj content",
-		scribe.DocDecisions: "dec content",
-		scribe.DocChangelog: "log content",
-		scribe.DocJournal:   "journal content",
-	}
+func TestBuildDocPromptIncludesOwnContentAndEntries(t *testing.T) {
 	entries := []scribe.Entry{
 		{Role: "user", Text: "do the thing", Timestamp: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)},
 	}
-	prompt := buildPrompt(current, entries)
-	for _, want := range []string{"proj content", "dec content", "log content", "journal content", "do the thing"} {
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
+	for _, want := range []string{"log content", "do the thing", noChangeSentinel} {
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+// TestBuildDocPromptDoesNotLeakOtherDocsGuidance is phase 03 item 1's core
+// promise: a CHANGELOG job should not be handed DECISIONS guidance, or vice
+// versa. Each per-doc prompt is built from only that doc's own current
+// content and its own docPrompts entry, so the other three docs' guidance
+// text (which is doc-specific enough to be a reliable fingerprint) must
+// never show up.
+func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
+	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
+
+	leaks := []string{
+		"one block per decision",   // DECISIONS guidance
+		"who it's for, where it",   // PROJECT guidance
+		"AI got confidently wrong", // JOURNAL guidance
+	}
+	for _, l := range leaks {
+		if contains(prompt, l) {
+			t.Fatalf("CHANGELOG prompt leaked another doc's guidance (%q):\n%s", l, prompt)
+		}
+	}
+}
+
+// TestBuildDocPromptCorrectionPathGuidance checks phase 03 item 3 actually
+// landed in the prompt text: PROJECT.md's guidance must tell the writer to
+// pull stale claims, and DECISIONS.md's guidance must tell it to record why
+// a decision was dropped, rather than silently deleting the block. The
+// parse/apply path needs no extra support for this beyond what already
+// exists — PROJECT.md and DECISIONS.md are full-replace state docs
+// (docs.WriteState), so a corrected PROJECT.md that simply omits the
+// scrapped claim, or a DECISIONS.md with a new "dropped: ..." block, is
+// just an ordinary WriteState call, not a special case.
+func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
+	entries := []scribe.Entry{{Role: "user", Text: "scrapping the plan"}}
+
+	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries, CodeWeightCheck)
+	if !contains(projectPrompt, "normal case") || !contains(projectPrompt, "remove that") {
+		t.Fatalf("PROJECT prompt missing correction-path guidance:\n%s", projectPrompt)
+	}
+
+	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries, CodeWeightCheck)
+	if !contains(decisionsPrompt, "dropped") || !contains(decisionsPrompt, "why") {
+		t.Fatalf("DECISIONS prompt missing correction-path guidance:\n%s", decisionsPrompt)
+	}
+}
+
+// TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing pins down
+// phase 03 item 4: JOURNAL.md's guidance must distinguish what it wants
+// (problems hit, AI mistakes, dead ends, the fix) from what it doesn't
+// (a tool-call narration, a changelog restatement), with concrete examples
+// of each — not just a one-line description a model can satisfy with
+// filler.
+func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
+	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
+	prompt := buildDocPrompt(scribe.DocJournal, "current", entries, CodeWeightCheck)
+
+	for _, want := range []string{
+		"confidently wrong", // what it wants
+		"dead ends",
+		"Good entry", // a concrete example of each
+		"Bad entry",
+		"quiet session", // permission to write nothing when there's nothing
+	} {
+		if !contains(prompt, want) {
+			t.Fatalf("JOURNAL prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// TestBuildDocPromptCodeWeightChangesText checks phase 03 item 5's knob
+// actually changes what the writer is told, per weight value, and that
+// Deps.codeWeight() defaults an unset field to the safe CodeWeightCheck.
+func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
+	entries := []scribe.Entry{{Role: "user", Text: "shipped it"}}
+
+	check := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightCheck)
+	if !contains(check, "verify") {
+		t.Fatalf("CodeWeightCheck prompt should say 'verify':\n%s", check)
+	}
+	if contains(check, "may use it to source") {
+		t.Fatalf("CodeWeightCheck prompt should not offer to source content from code:\n%s", check)
+	}
+
+	full := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightFull)
+	if !contains(full, "may use it to source") {
+		t.Fatalf("CodeWeightFull prompt should say it may source content from code:\n%s", full)
+	}
+
+	off := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightOff)
+	if !contains(off, "do not have code access") {
+		t.Fatalf("CodeWeightOff prompt should say code access is off:\n%s", off)
+	}
+
+	var d Deps
+	if got := d.codeWeight(); got != CodeWeightCheck {
+		t.Fatalf("expected default CodeWeight to be %q, got %q", CodeWeightCheck, got)
+	}
+	d.CodeWeight = CodeWeightFull
+	if got := d.codeWeight(); got != CodeWeightFull {
+		t.Fatalf("expected an explicitly set CodeWeight to be honored, got %q", got)
+	}
+}
+
+func TestKeywordPrefilter(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"we decided to go with postgres", true},
+		{"dropped the redis idea", true},
+		{"instead of a queue we'll use a channel", true},
+		{"fixed the off-by-one in the offset loader", false},
+		{"ran go test, all green", false},
+	}
+	for _, tt := range tests {
+		got := keywordPrefilter([]scribe.Entry{{Role: "user", Text: tt.text}})
+		if got != tt.want {
+			t.Errorf("keywordPrefilter(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestParseGateOutput(t *testing.T) {
+	tests := []struct {
+		out  string
+		want bool
+	}{
+		{"YES", true},
+		{"yes", true},
+		{"  Yes.  ", true},
+		{"NO", false},
+		{"no", false},
+		{"unsure", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := parseGateOutput(tt.out); got != tt.want {
+			t.Errorf("parseGateOutput(%q) = %v, want %v", tt.out, got, tt.want)
+		}
+	}
+}
+
+// TestGateProductLevelSkipsClassificationWithoutKeywordHit checks that the
+// keyword prefilter actually saves a writer call, not just that it returns
+// the right bool — a plain "no keyword -> false" test could pass even if
+// gateProductLevel called the writer anyway and ignored the answer.
+func TestGateProductLevelSkipsClassificationWithoutKeywordHit(t *testing.T) {
+	w := &fakeWriter{}
+	deps := Deps{Writer: w}
+	entries := []scribe.Entry{{Role: "user", Text: "fixed a typo"}}
+
+	gateIn, err := gateProductLevel(deps, entries)
+	if err != nil {
+		t.Fatalf("gateProductLevel: %v", err)
+	}
+	if gateIn {
+		t.Fatal("expected gateIn=false with no keyword hit")
+	}
+	if w.calls != 0 {
+		t.Fatalf("expected no classification call without a keyword hit, got %d calls", w.calls)
+	}
+}
+
+// TestGateProductLevelAsksClassifierOnKeywordHit is the other half: a
+// keyword hit alone isn't the verdict, it's permission to ask the cheap
+// classifier, whose answer is what actually decides.
+func TestGateProductLevelAsksClassifierOnKeywordHit(t *testing.T) {
+	w := &fakeWriter{outputs: []string{"NO"}}
+	deps := Deps{Writer: w}
+	entries := []scribe.Entry{{Role: "user", Text: "we decided to drop the queue idea"}}
+
+	gateIn, err := gateProductLevel(deps, entries)
+	if err != nil {
+		t.Fatalf("gateProductLevel: %v", err)
+	}
+	if gateIn {
+		t.Fatal("expected gateIn=false when the classifier answers NO, even with a keyword hit")
+	}
+	if w.calls != 1 {
+		t.Fatalf("expected exactly one classification call on a keyword hit, got %d", w.calls)
 	}
 }
 
@@ -550,4 +791,103 @@ func indexOf(haystack, needle string) int {
 		}
 	}
 	return -1
+}
+
+// A failed call for one doc must not discard the docs that succeeded.
+// Phase 03 took a run from one writer call to as many as four, so aborting
+// on the first error would both multiply the per-run failure rate and throw
+// away work — and because the offset wouldn't advance, the next run would
+// pay for all of it again.
+func TestPartialDocFailureKeepsTheDocsThatSucceeded(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	// CHANGELOG succeeds, JOURNAL fails. No gate keyword, so that's all.
+	w := &fakeWriter{
+		outputs: []string{"a real changelog entry", ""},
+		errs:    []error{nil, errors.New("journal call boom")},
+	}
+
+	var log bytes.Buffer
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w, Log: &log,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run should survive one failed doc call, got: %v", err)
+	}
+	if len(store.history[scribe.DocChangelog]) != 1 {
+		t.Fatalf("changelog entry was discarded because journal failed: %v", store.history[scribe.DocChangelog])
+	}
+	if got := tr.offsets["s1"]; got != 1 {
+		t.Fatalf("offset should advance when the run did real work, got %d", got)
+	}
+	if !strings.Contains(log.String(), "journal call boom") {
+		t.Fatalf("a partial failure must be visible, got log: %q", log.String())
+	}
+}
+
+// A gate failure is the worst version of the above: it happens *after*
+// CHANGELOG and JOURNAL are already in hand, and the gate only decides
+// whether to attempt two optional docs. Losing the history edits to it
+// would be strictly wrong.
+func TestGateFailureDoesNotDiscardHistoryEdits(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	// "decided" trips the keyword prefilter, so the gate call actually runs.
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "we decided to drop it"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{
+		outputs: []string{"changelog entry", "journal entry", ""},
+		errs:    []error{nil, nil, errors.New("gate boom")},
+	}
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run should survive a failed gate call, got: %v", err)
+	}
+	if len(store.history[scribe.DocChangelog]) != 1 || len(store.history[scribe.DocJournal]) != 1 {
+		t.Fatalf("gate failure discarded history edits: changelog=%v journal=%v",
+			store.history[scribe.DocChangelog], store.history[scribe.DocJournal])
+	}
+	if got := tr.offsets["s1"]; got != 1 {
+		t.Fatalf("offset should advance, got %d", got)
+	}
+}
+
+// When every call fails there is genuinely nothing to apply, and the
+// offset must stay put so the next run retries these transcript bytes.
+func TestAllDocCallsFailingIsStillAFailedRun(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{errs: []error{errors.New("boom one"), errors.New("boom two")}}
+
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+	}
+
+	if err := Run(deps); err == nil {
+		t.Fatal("a run where every doc call failed must be an error")
+	}
+	if got, ok := tr.offsets["s1"]; ok && got != 0 {
+		t.Fatalf("offset must not advance when nothing succeeded, got %d", got)
+	}
 }
