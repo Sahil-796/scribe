@@ -30,6 +30,74 @@ import (
 // "something went wrong" instead of guessing.
 const noChangeSentinel = "NO_CHANGE"
 
+// gateKeywords is the cheap prefilter in front of the (still cheap, but not
+// free) classification call in gateProductLevel (worker.go). Phase 03 item
+// 2 asks for a gate the writer answers itself over a brittle keyword
+// heuristic, but allows a keyword prefilter in front of it — this is that
+// prefilter: if none of these show up anywhere in the new entries, there's
+// no point paying for a classification call, PROJECT and DECISIONS are
+// skipped outright. If one does show up, that's not a verdict, just a
+// reason to ask the cheap classifier for a real answer (buildGatePrompt).
+var gateKeywords = []string{
+	"decide", "decided", "decision", "instead of", "trade-off", "tradeoff",
+	"pivot", "scrap", "abandon", "chose", "choose between", "requirement",
+	"no longer", "rename the project", "who this is for", "target audience",
+	"roadmap", "out of scope", "in scope", "drop the", "dropped the",
+	"supersede", "superseded",
+}
+
+// keywordPrefilter reports whether any new entry looks like it might
+// contain product-level talk. A false positive just costs one cheap
+// classification call; a false negative silently starves PROJECT/DECISIONS
+// of an update they deserved, so this errs toward matching too much rather
+// than too little.
+func keywordPrefilter(entries []scribe.Entry) bool {
+	for _, e := range entries {
+		lower := strings.ToLower(e.Text)
+		for _, kw := range gateKeywords {
+			if strings.Contains(lower, kw) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// buildGatePrompt asks the writer a single cheap yes/no question: did
+// anything product-level happen in this slice of conversation? This is the
+// "writer answers it in one cheap classification step" gate phase 03 item 2
+// prefers over a brittle keyword heuristic alone — keywordPrefilter decides
+// whether it's worth asking at all, this decides the actual answer.
+func buildGatePrompt(entries []scribe.Entry) string {
+	var b strings.Builder
+	b.WriteString(`Answer one question about the conversation excerpt below: does it
+contain product-level talk — a decision made, dropped, or superseded; a
+change to what the project is, who it's for, or where it stands?
+
+Ordinary engineering work (reading code, writing a function, fixing a bug,
+running tests, refactoring) is NOT product-level by itself, even if it's
+substantial. Only answer YES if something was actually chosen, dropped, or
+the shape of the project itself changed.
+
+Respond with exactly one word: YES or NO. Nothing else — no punctuation, no
+explanation.
+
+--- conversation ---
+`)
+	writeEntries(&b, entries)
+	return b.String()
+}
+
+// parseGateOutput reads the classification call's answer. Anything that
+// isn't a clear YES is treated as NO — this gate exists to keep PROJECT and
+// DECISIONS from being bothered for ordinary sessions, so an ambiguous
+// answer should fail closed (skip), not fail open (run two more calls that
+// probably weren't needed).
+func parseGateOutput(out string) bool {
+	cleaned := strings.ToUpper(strings.TrimSpace(stripCodeFence(strings.TrimSpace(out))))
+	return strings.HasPrefix(cleaned, "YES")
+}
+
 // writeEntries renders the new transcript entries in the shared
 // "[timestamp role]: text" format every per-doc prompt uses.
 func writeEntries(b *strings.Builder, entries []scribe.Entry) {

@@ -200,8 +200,9 @@ func (f *fakeTranscript) SaveOffset(repoRoot string, o scribe.Offset) error {
 
 // ---- tests ----
 
-// Every run now costs one writer call per doc (docOrder: CHANGELOG,
-// JOURNAL, PROJECT, DECISIONS), phase 03 item 1's per-doc split.
+// "hello" contains none of gateKeywords, so the gate's keyword prefilter
+// skips the classification call and PROJECT/DECISIONS entirely — a run
+// like this costs exactly two writer calls: CHANGELOG, then JOURNAL.
 func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
 		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
@@ -210,12 +211,7 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
 
 	store := newFakeDocStore()
-	w := &fakeWriter{outputs: []string{
-		"did a thing",    // CHANGELOG
-		noChangeSentinel, // JOURNAL
-		noChangeSentinel, // PROJECT
-		noChangeSentinel, // DECISIONS
-	}}
+	w := &fakeWriter{outputs: []string{"did a thing", noChangeSentinel}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -235,8 +231,8 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	if q.lockCalls != 1 || q.unlockCalls != 1 {
 		t.Fatalf("expected exactly one lock/unlock cycle, got lock=%d unlock=%d", q.lockCalls, q.unlockCalls)
 	}
-	if w.calls != 4 {
-		t.Fatalf("expected exactly 4 writer calls (one per doc), got %d", w.calls)
+	if w.calls != 2 {
+		t.Fatalf("expected exactly 2 writer calls (CHANGELOG, JOURNAL — no gate keyword, so PROJECT/DECISIONS skipped), got %d", w.calls)
 	}
 }
 
@@ -279,7 +275,7 @@ func TestOffsetDoesNotAdvanceWhenDocWriteFails(t *testing.T) {
 
 	store := newFakeDocStore()
 	store.writeErr = errors.New("disk full")
-	w := &fakeWriter{outputs: []string{"did a thing", noChangeSentinel, noChangeSentinel, noChangeSentinel}}
+	w := &fakeWriter{outputs: []string{"did a thing", noChangeSentinel}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -308,11 +304,11 @@ func TestRunReRunsWhenPendingFlagIsSet(t *testing.T) {
 	}
 
 	store := newFakeDocStore()
-	// Each runOnce makes one call per doc (docOrder has 4 entries), so two
-	// runOnce iterations cost eight calls total.
+	// Each runOnce makes two calls with no gate keyword present (CHANGELOG,
+	// then JOURNAL), so two runOnce iterations cost four calls total.
 	w := &fakeWriter{outputs: []string{
-		"covered first", noChangeSentinel, noChangeSentinel, noChangeSentinel,
-		"covered second", noChangeSentinel, noChangeSentinel, noChangeSentinel,
+		"covered first", noChangeSentinel,
+		"covered second", noChangeSentinel,
 	}}
 
 	// Simulate a trigger landing mid-run: runOnce always calls the writer
@@ -422,7 +418,7 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	tr := newFakeTranscript()
 	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
 	store := newFakeDocStore()
-	w := &fakeWriter{outputs: []string{"one entry", noChangeSentinel, noChangeSentinel, noChangeSentinel}}
+	w := &fakeWriter{outputs: []string{"one entry", noChangeSentinel}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -432,12 +428,12 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	if err := Run(deps); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Coalescing means one read of the new bytes, not one writer call —
-	// this run still makes one call per doc (docOrder has 4 entries). What
-	// coalescing buys is a single offset save below, not a single writer
-	// call.
-	if w.calls != 4 {
-		t.Fatalf("expected exactly 4 writer calls (one per doc) for one coalesced batch, got %d", w.calls)
+	// Coalescing means one read of the new bytes, not one writer call — this
+	// run still makes one call per doc in play (CHANGELOG, JOURNAL; no gate
+	// keyword here). What coalescing buys is a single offset save below,
+	// not a single writer call.
+	if w.calls != 2 {
+		t.Fatalf("expected exactly 2 writer calls (CHANGELOG, JOURNAL) for one coalesced batch, got %d", w.calls)
 	}
 	if len(tr.saveCalls) != 1 {
 		t.Fatalf("expected exactly one offset save for the one session, got %d", len(tr.saveCalls))
@@ -460,7 +456,7 @@ func TestRunSucceedsWhenEveryDocDeclines(t *testing.T) {
 	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
 
 	store := newFakeDocStore()
-	w := &fakeWriter{outputs: []string{noChangeSentinel, noChangeSentinel, noChangeSentinel, noChangeSentinel}}
+	w := &fakeWriter{outputs: []string{noChangeSentinel, noChangeSentinel}}
 
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
@@ -489,22 +485,24 @@ func TestRunSucceedsWhenEveryDocDeclines(t *testing.T) {
 // wearing a disguise, and must be treated as an error, not silently
 // accepted.
 //
-// This needs a state doc (PROJECT/DECISIONS) to exercise, since
+// This needs a gated-in PROJECT/DECISIONS call to exercise, since
 // CHANGELOG/JOURNAL are history docs — AppendHistory always grows the
 // file, so an "identical" entry still changes the doc on disk. Only a
-// state doc's WriteState can produce a byte-for-byte no-op.
+// state doc's WriteState can produce a byte-for-byte no-op, so the entry
+// text below deliberately trips the gate keyword prefilter.
 func TestRunFailsWhenWriterEchoesUnchangedContent(t *testing.T) {
 	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
 		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
 	}}
 	tr := newFakeTranscript()
-	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "we decided to go with plan B"}}
 
 	store := newFakeDocStore()
 	store.state[scribe.DocProject] = "existing content"
 	w := &fakeWriter{outputs: []string{
 		noChangeSentinel,   // CHANGELOG
 		noChangeSentinel,   // JOURNAL
+		"YES",              // gate classification ("decided" tripped the prefilter)
 		"existing content", // PROJECT — echoed back unchanged
 		noChangeSentinel,   // DECISIONS
 	}}
@@ -617,6 +615,86 @@ func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 		if contains(prompt, l) {
 			t.Fatalf("CHANGELOG prompt leaked another doc's guidance (%q):\n%s", l, prompt)
 		}
+	}
+}
+
+func TestKeywordPrefilter(t *testing.T) {
+	tests := []struct {
+		text string
+		want bool
+	}{
+		{"we decided to go with postgres", true},
+		{"dropped the redis idea", true},
+		{"instead of a queue we'll use a channel", true},
+		{"fixed the off-by-one in the offset loader", false},
+		{"ran go test, all green", false},
+	}
+	for _, tt := range tests {
+		got := keywordPrefilter([]scribe.Entry{{Role: "user", Text: tt.text}})
+		if got != tt.want {
+			t.Errorf("keywordPrefilter(%q) = %v, want %v", tt.text, got, tt.want)
+		}
+	}
+}
+
+func TestParseGateOutput(t *testing.T) {
+	tests := []struct {
+		out  string
+		want bool
+	}{
+		{"YES", true},
+		{"yes", true},
+		{"  Yes.  ", true},
+		{"NO", false},
+		{"no", false},
+		{"unsure", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := parseGateOutput(tt.out); got != tt.want {
+			t.Errorf("parseGateOutput(%q) = %v, want %v", tt.out, got, tt.want)
+		}
+	}
+}
+
+// TestGateProductLevelSkipsClassificationWithoutKeywordHit checks that the
+// keyword prefilter actually saves a writer call, not just that it returns
+// the right bool — a plain "no keyword -> false" test could pass even if
+// gateProductLevel called the writer anyway and ignored the answer.
+func TestGateProductLevelSkipsClassificationWithoutKeywordHit(t *testing.T) {
+	w := &fakeWriter{}
+	deps := Deps{Writer: w}
+	entries := []scribe.Entry{{Role: "user", Text: "fixed a typo"}}
+
+	gateIn, err := gateProductLevel(deps, entries)
+	if err != nil {
+		t.Fatalf("gateProductLevel: %v", err)
+	}
+	if gateIn {
+		t.Fatal("expected gateIn=false with no keyword hit")
+	}
+	if w.calls != 0 {
+		t.Fatalf("expected no classification call without a keyword hit, got %d calls", w.calls)
+	}
+}
+
+// TestGateProductLevelAsksClassifierOnKeywordHit is the other half: a
+// keyword hit alone isn't the verdict, it's permission to ask the cheap
+// classifier, whose answer is what actually decides.
+func TestGateProductLevelAsksClassifierOnKeywordHit(t *testing.T) {
+	w := &fakeWriter{outputs: []string{"NO"}}
+	deps := Deps{Writer: w}
+	entries := []scribe.Entry{{Role: "user", Text: "we decided to drop the queue idea"}}
+
+	gateIn, err := gateProductLevel(deps, entries)
+	if err != nil {
+		t.Fatalf("gateProductLevel: %v", err)
+	}
+	if gateIn {
+		t.Fatal("expected gateIn=false when the classifier answers NO, even with a keyword hit")
+	}
+	if w.calls != 1 {
+		t.Fatalf("expected exactly one classification call on a keyword hit, got %d", w.calls)
 	}
 }
 

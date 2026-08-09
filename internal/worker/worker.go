@@ -283,24 +283,60 @@ func docsUnchanged(before, after map[scribe.Doc]string) bool {
 // compile-time check that *docs.Store satisfies DocStore.
 var _ DocStore = (*docs.Store)(nil)
 
-// docOrder is CHANGELOG/JOURNAL first, then PROJECT/DECISIONS — most
-// sessions only ever need the first pair (docs/PLAN.md, "The four docs"),
-// so that's the group every run pays for; the second pair is the
-// less-common, more-expensive one.
-var docOrder = []scribe.Doc{scribe.DocChangelog, scribe.DocJournal, scribe.DocProject, scribe.DocDecisions}
+// changelogAndJournal are the two docs every run considers — most
+// engineering sessions never touch PROJECT or DECISIONS (docs/PLAN.md,
+// "The four docs"). projectAndDecisions are only considered when
+// gateProductLevel says so.
+var changelogAndJournal = []scribe.Doc{scribe.DocChangelog, scribe.DocJournal}
+var projectAndDecisions = []scribe.Doc{scribe.DocProject, scribe.DocDecisions}
 
-// collectEdits runs one focused writer call per doc (phase 03 item 1: a
-// separate prompt per doc) and returns whatever changes came back.
+// collectEdits runs one focused writer call per doc that's in play this
+// run (phase 03 item 1: a separate prompt per doc) and returns whatever
+// changes came back. CHANGELOG and JOURNAL are always attempted; PROJECT
+// and DECISIONS are only attempted if gateProductLevel says this slice of
+// conversation actually contains product-level talk (phase 03 item 2) —
+// skipping the calls entirely is both cheaper and truer to that intent
+// than calling and discarding.
 func collectEdits(deps Deps, current map[scribe.Doc]string, entries []scribe.Entry) (edits, error) {
 	result := make(edits)
 
-	for _, d := range docOrder {
+	for _, d := range changelogAndJournal {
 		if err := runDocWriter(deps, d, current, entries, result); err != nil {
 			return nil, err
 		}
 	}
 
+	gateIn, err := gateProductLevel(deps, entries)
+	if err != nil {
+		return nil, err
+	}
+	if gateIn {
+		for _, d := range projectAndDecisions {
+			if err := runDocWriter(deps, d, current, entries, result); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return result, nil
+}
+
+// gateProductLevel decides whether PROJECT.md/DECISIONS.md are worth
+// asking about this run (phase 03 item 2). keywordPrefilter is a free,
+// local check that skips the classification call entirely for runs with no
+// hint of product-level talk; if it finds something, a single cheap writer
+// call (buildGatePrompt) gives the real answer rather than trusting the
+// keyword match itself, which is exactly the "brittle keyword heuristic"
+// the plan says to prefer a classifier over.
+func gateProductLevel(deps Deps, entries []scribe.Entry) (bool, error) {
+	if !keywordPrefilter(entries) {
+		return false, nil
+	}
+	out, err := deps.Writer.Run(buildGatePrompt(entries))
+	if err != nil {
+		return false, fmt.Errorf("worker: gate classification run: %w", err)
+	}
+	return parseGateOutput(out), nil
 }
 
 // runDocWriter makes one writer call for doc d and, if it came back with a
