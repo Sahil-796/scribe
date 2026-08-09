@@ -112,23 +112,42 @@ func TestRun_HappyPath_DrainsQueueAndAppliesWriterEdits(t *testing.T) {
 		t.Fatalf("enqueueing trigger: %v", err)
 	}
 
-	fakeOut := `{"PROJECT.md":"# Project\n\nUpdated by the fake writer.\n"}`
+	// Phase 03 replaced the single combined JSON call with one plain-text
+	// call per doc, so the fake's output is now an entry, not an envelope.
+	// This transcript is pure engineering with no product-level talk, so the
+	// PROJECT/DECISIONS gate declines before spending a call on either —
+	// leaving exactly the two history docs, one call each.
+	fakeOut := "- Updated by the fake writer."
 	calls := withFakeRunWriter(t, fakeOut)
 
 	stdout, _, err := runRunCmd(t, dir)
 	if err != nil {
 		t.Fatalf("scribe run failed: %v\nstdout: %s", err, stdout)
 	}
-	if *calls != 1 {
-		t.Fatalf("writer was called %d time(s), want 1", *calls)
+	if *calls != 2 {
+		t.Fatalf("writer was called %d time(s), want 2 (CHANGELOG + JOURNAL)", *calls)
 	}
 
+	for _, doc := range []scribe.Doc{scribe.DocChangelog, scribe.DocJournal} {
+		path := filepath.Join(dir, "docs", "scribe", string(doc))
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("expected %s to exist after run: %v", path, err)
+		}
+		if !bytes.Contains(b, []byte("Updated by the fake writer")) {
+			t.Fatalf("%s wasn't updated by the writer's output, got: %s", doc, b)
+		}
+	}
+
+	// The gate must actually have kept PROJECT.md out of it. The file still
+	// exists — the store creates all four lazily with a header on first read
+	// — so the check is that the writer's output never landed in it.
 	projectPath := filepath.Join(dir, "docs", "scribe", string(scribe.DocProject))
 	b, err := os.ReadFile(projectPath)
 	if err != nil {
-		t.Fatalf("expected %s to exist after run: %v", projectPath, err)
+		t.Fatalf("reading %s: %v", projectPath, err)
 	}
-	if !bytes.Contains(b, []byte("Updated by the fake writer")) {
-		t.Fatalf("PROJECT.md wasn't updated by the writer's output, got: %s", b)
+	if bytes.Contains(b, []byte("Updated by the fake writer")) {
+		t.Fatalf("%s was written for a transcript with no product-level content", projectPath)
 	}
 }
