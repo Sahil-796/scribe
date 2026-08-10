@@ -322,3 +322,20 @@ func TestRotationInANewMonthAddsASecondPointer(t *testing.T) {
 		t.Fatalf("rotations across two months left pointers for %d archives, want 2: %v", len(paths), paths)
 	}
 }
+
+func TestParseArchivePointerExportedMatchesUnexported(t *testing.T) {
+	block := archivePointerText(3, "archive/CHANGELOG-2026-08.md")
+
+	wantN, wantPath, wantOK := parseArchivePointer(block)
+	gotN, gotPath, gotOK := ParseArchivePointer(block)
+	if gotN != wantN || gotPath != wantPath || gotOK != wantOK {
+		t.Fatalf("ParseArchivePointer = (%d, %q, %v), want (%d, %q, %v)", gotN, gotPath, gotOK, wantN, wantPath, wantOK)
+	}
+	if !gotOK || gotN != 3 || gotPath != "archive/CHANGELOG-2026-08.md" {
+		t.Fatalf("unexpected parse result: n=%d path=%q ok=%v", gotN, gotPath, gotOK)
+	}
+
+	if _, _, ok := ParseArchivePointer("not a pointer"); ok {
+		t.Fatalf("expected ParseArchivePointer to reject a non-pointer block")
+	}
+}
