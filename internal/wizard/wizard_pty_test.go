@@ -344,17 +344,51 @@ func TestAsk_PTY_CtrlC_Aborts(t *testing.T) {
 	}
 }
 
-// TestAsk_PTY_Esc_DoesNotAbort documents huh v1.0.0's actual key bindings
-// (verified by hand against the vendored source: form.go's default keymap
-// binds Quit — the only thing that sets StateAborted — to "ctrl+c" alone;
-// no field's default keymap treats a bare Esc as an abort). Esc is
-// mentioned alongside Ctrl+C in wizard.go's ErrUserAborted comment and in
-// OPEN-ITEMS item 15, but at this huh version it is not actually wired to
-// anything that aborts the form. This test exists so that claim is
-// verified rather than assumed, and so a future huh upgrade that *does*
-// wire Esc to abort gets caught by a newly-failing assertion here instead
-// of silently changing behavior.
-func TestAsk_PTY_Esc_DoesNotAbort(t *testing.T) {
+// TestAsk_PTY_Esc_Aborts covers OPEN-ITEMS item 32: Esc now backs out of
+// the form exactly like Ctrl+C, via withAbortKeys' extra Quit binding
+// (wizard.go). This used to be a documented no-op (huh v1.0.0's own
+// default keymap binds Quit to "ctrl+c" alone) — this test replaces that
+// old assertion now that the package adds the binding itself.
+func TestAsk_PTY_Esc_Aborts(t *testing.T) {
+	s := newPTYSession(t)
+
+	type result struct {
+		answers Answers
+		err     error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		a, err := Ask(Options{
+			RepoRoot:     "/repo",
+			Agents:       []string{"opencode", "claude", "custom"},
+			DefaultAgent: "opencode",
+		})
+		resCh <- result{a, err}
+	}()
+
+	s.WaitFor("scribe init", ptyTimeout)
+	s.Send(keyEnter)
+	s.WaitForFocused("Agent", ptyTimeout)
+	s.Send(keyDown) // pick "claude" before backing out, so we can prove it survives the abort
+	s.Send(keyEsc)
+
+	got := waitOnResult(t, resCh, ptyTimeout, func() string { return s.snapshot() })
+	if got.err != nil {
+		t.Fatalf("Ask() error = %v, want nil (huh.ErrUserAborted must be swallowed, not surfaced)", got.err)
+	}
+	if got.answers.Proceed {
+		t.Fatalf("Ask().Proceed = true after Esc, want false")
+	}
+	if got.answers.Agent != "claude" {
+		t.Fatalf("Ask().Agent = %q after Esc, want %q (whatever was chosen before backing out)", got.answers.Agent, "claude")
+	}
+}
+
+// TestAsk_PTY_CtrlC_StillAborts guards against withAbortKeys' extra Esc
+// binding accidentally displacing the original ctrl+c one — key.Binding
+// takes a list of keys, so this is really a "both keys, not just the new
+// one" check.
+func TestAsk_PTY_CtrlC_StillAborts(t *testing.T) {
 	s := newPTYSession(t)
 
 	type result struct {
@@ -370,24 +404,58 @@ func TestAsk_PTY_Esc_DoesNotAbort(t *testing.T) {
 	s.WaitFor("scribe init", ptyTimeout)
 	s.Send(keyEnter)
 	s.WaitForFocused("Agent", ptyTimeout)
-	s.Send(keyEsc)
-
-	// Give the form a beat to (not) react, then prove it's still running
-	// and still on the same screen rather than having aborted.
-	select {
-	case r := <-resCh:
-		t.Fatalf("Ask() returned after Esc (answers=%+v err=%v); expected Esc to be a no-op at this huh version", r.answers, r.err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	s.WaitForFocused("Agent", ptyTimeout)
-
-	// Clean up the still-blocked goroutine with the key that does work.
 	s.Send(keyCtrlC)
+
 	got := waitOnResult(t, resCh, ptyTimeout, func() string { return s.snapshot() })
 	if got.err != nil {
 		t.Fatalf("Ask() error = %v, want nil", got.err)
 	}
 	if got.answers.Proceed {
-		t.Fatalf("Ask().Proceed = true, want false")
+		t.Fatalf("Ask().Proceed = true after Ctrl+C, want false")
+	}
+}
+
+// TestAsk_PTY_Esc_DuringFilter_AbortsInsteadOfClearingFilter documents the
+// trade-off withAbortKeys' doc comment calls out: huh's Select field binds
+// a bare Esc to leaving filter mode (SetFilter/ClearFilter in huh's
+// keymap.go) while filtering, but Form.Update checks the form-level Quit
+// binding before the keypress ever reaches the focused field (huh's
+// form.go). Once Esc is also a Quit key, pressing it mid-filter aborts the
+// whole form instead of just clearing the filter — a real regression in
+// that one interaction, accepted as the cost of having a working abort key
+// at all. This test exists so that trade-off stays visible and provable,
+// not just asserted in a comment.
+func TestAsk_PTY_Esc_DuringFilter_AbortsInsteadOfClearingFilter(t *testing.T) {
+	s := newPTYSession(t)
+
+	type result struct {
+		answers Answers
+		err     error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		a, err := Ask(Options{
+			RepoRoot:     "/repo",
+			Agents:       []string{"opencode", "claude", "custom"},
+			DefaultAgent: "opencode",
+		})
+		resCh <- result{a, err}
+	}()
+
+	s.WaitFor("scribe init", ptyTimeout)
+	s.Send(keyEnter)
+	s.WaitForFocused("Agent", ptyTimeout)
+
+	s.Send("/") // enter filter mode on the Agent select
+	s.WaitFor("/", ptyTimeout)
+	s.Send("claude") // type a filter
+	s.Send(keyEsc)   // would normally leave filter mode and keep the results
+
+	got := waitOnResult(t, resCh, ptyTimeout, func() string { return s.snapshot() })
+	if got.err != nil {
+		t.Fatalf("Ask() error = %v, want nil (huh.ErrUserAborted must be swallowed, not surfaced)", got.err)
+	}
+	if got.answers.Proceed {
+		t.Fatalf("Ask().Proceed = true after Esc mid-filter, want false — this test documents that Esc aborts the form rather than just clearing the filter")
 	}
 }

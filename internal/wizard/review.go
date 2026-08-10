@@ -36,12 +36,13 @@ func Review(preview map[scribe.Doc]string) (bool, error) {
 		),
 	)
 
-	form = withFormIO(form)
+	form = withAbortKeys(withFormIO(form))
 
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			// Backing out of the review is a "no", not an error — the
-			// caller must not write anything.
+			// Backing out of the review (Ctrl+C or Esc — see
+			// withAbortKeys) is a "no", not an error — the caller must not
+			// write anything.
 			return false, nil
 		}
 		return false, fmt.Errorf("wizard: review form: %w", err)

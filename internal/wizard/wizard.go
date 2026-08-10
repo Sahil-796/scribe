@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/huh"
 	"github.com/mattn/go-isatty"
 
@@ -140,6 +141,37 @@ func withFormIO(f *huh.Form) *huh.Form {
 		f = f.WithOutput(formOutput)
 	}
 	return f
+}
+
+// withAbortKeys binds Esc alongside huh's default ctrl+c-only Quit
+// (OPEN-ITEMS item 32). huh v1.0.0's own default keymap only ever sets
+// Quit to "ctrl+c" (keymap.go); an operator who wants out and presses Esc
+// instead gets nothing and, absent this, would eventually kill the
+// terminal — leaving a half-onboarded repo behind. Esc-to-cancel is a
+// standard enough terminal convention that it should just work here too.
+//
+// This goes through huh's own WithKeyMap rather than intercepting key
+// messages ourselves, so it stays a keymap change, not a parallel input
+// path. huh.NewDefaultKeyMap() is called fresh each time (not shared as a
+// package var) because Form.WithKeyMap propagates the same *KeyMap
+// pointer down into every field, and two forms sharing one mutable keymap
+// would let a change to one bleed into the other.
+//
+// The one place this trades something away: a Select field's own keymap
+// binds a bare Esc to leaving filter mode (SetFilter/ClearFilter in
+// keymap.go), but Form.Update checks its own Quit binding before the
+// keypress ever reaches the focused field (form.go). So while a select is
+// mid-filter (after pressing "/"), Esc now aborts the whole form instead
+// of just clearing the filter — verified live through a pty
+// (TestAsk_PTY_Esc_DuringFilter_AbortsInsteadOfClearingFilter). The
+// operator isn't stuck: Enter still both applies the filter and commits
+// the highlighted option, so filtering itself remains usable, but "Esc to
+// step back to the unfiltered list" is gone. That's judged an acceptable
+// trade for having a working abort key at all.
+func withAbortKeys(f *huh.Form) *huh.Form {
+	km := huh.NewDefaultKeyMap()
+	km.Quit = key.NewBinding(key.WithKeys("ctrl+c", "esc"))
+	return f.WithKeyMap(km)
 }
 
 // IsInteractive reports whether a form can be shown at all. Both stdin and
@@ -275,19 +307,13 @@ func Ask(o Options) (Answers, error) {
 		),
 	)
 
-	form = withFormIO(form)
+	form = withAbortKeys(withFormIO(form))
 
 	if err := form.Run(); err != nil {
 		if errors.Is(err, huh.ErrUserAborted) {
-			// Ctrl+C: not an error, just "the user backed out". Report
-			// whatever was chosen so far but with Proceed false.
-			//
-			// Ctrl+C only — this comment used to say "Ctrl+C / Esc" and
-			// that was wrong. huh v1.0.0 binds Quit to ctrl+c alone
-			// (keymap.go), so a bare Esc does nothing here; verified
-			// against the vendored source and live through a pty. If Esc
-			// should also back out, that's a binding to add, not a
-			// behaviour that already exists.
+			// Ctrl+C or Esc (see withAbortKeys): not an error, just "the
+			// user backed out". Report whatever was chosen so far but with
+			// Proceed false.
 			return Answers{Agent: agent, Model: resolveModel(modelChoice, customModel), DocsDir: docsDir, DocsInGit: docsInGit, Layout: layout, Proceed: false}, nil
 		}
 		return Answers{}, fmt.Errorf("wizard: setup form: %w", err)

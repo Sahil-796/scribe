@@ -96,3 +96,32 @@ func TestReview_PTY_CtrlC_Aborts(t *testing.T) {
 		t.Fatal("Review() approved = true after Ctrl+C, want false")
 	}
 }
+
+// TestReview_PTY_Esc_Aborts covers OPEN-ITEMS item 32's Esc binding
+// (wizard.go's withAbortKeys) on the Review form specifically — Ask's pty
+// tests cover the setup form, but Review builds its own form and needs its
+// own proof that the same keymap change actually reaches it.
+func TestReview_PTY_Esc_Aborts(t *testing.T) {
+	s := newPTYSession(t)
+
+	type result struct {
+		approved bool
+		err      error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		ok, err := Review(map[scribe.Doc]string{scribe.DocProject: "hello world"})
+		resCh <- result{ok, err}
+	}()
+
+	s.WaitFor("Review", ptyTimeout)
+	s.Send(keyEsc)
+
+	got := waitOnResult(t, resCh, ptyTimeout, func() string { return s.snapshot() })
+	if got.err != nil {
+		t.Fatalf("Review() error = %v, want nil (huh.ErrUserAborted must be swallowed)", got.err)
+	}
+	if got.approved {
+		t.Fatal("Review() approved = true after Esc, want false")
+	}
+}
