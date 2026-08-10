@@ -194,6 +194,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	if !apply {
 		fmt.Fprintln(out, "\nDry run — nothing was written to docs/scribe, and no hook was installed.")
 		fmt.Fprintln(out, "Re-run with --apply once you're happy with the preview.")
+		fmt.Fprintln(out, "Working in other repos too? \"scribe nudge --install\" adds a one-time reminder if you go a while without running init there.")
 		return nil
 	}
 
@@ -377,6 +378,7 @@ func applyPreview(repoRoot string, preview map[scribe.Doc]string, answers wizard
 		fmt.Fprintf(out, "%s/ is committed to git — the docs are part of the repo.\n", scribe.DocsDir)
 	}
 	fmt.Fprintln(out, "\nscribe is now on for this repo — the four docs stay current after every reply.")
+	fmt.Fprintln(out, "Working in other repos too? \"scribe nudge --install\" adds a one-time reminder if you go a while without running init there.")
 	return nil
 }
 
