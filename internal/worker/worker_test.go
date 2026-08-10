@@ -9,8 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
+
+// testRedactor is the Redactor every test wires into Deps (now required —
+// see Deps.Redactor's doc comment). A fixed default key/ignore list is
+// enough for every existing test in this file: none of them are testing
+// redaction itself, so a Redactor that behaves like a real one wired from
+// install.Config's phase-04 defaults is what keeps this file's fakes
+// realistic without pulling internal/install into a worker test.
+func testRedactor() *redact.Redactor {
+	return redact.New(
+		[]string{"api_key", "token", "password", "secret"},
+		[]string{"**/.env*", "**/secrets/**"},
+	)
+}
 
 // ---- fakes ----
 
@@ -218,6 +232,7 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -254,6 +269,7 @@ func TestOffsetDoesNotAdvanceWhenWriterFails(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -282,6 +298,7 @@ func TestOffsetDoesNotAdvanceWhenDocWriteFails(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -325,6 +342,7 @@ func TestRunReRunsWhenPendingFlagIsSet(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: wrapped,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -375,6 +393,7 @@ func TestRunSkipsAndMarksPendingWhenLockAlreadyHeld(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -397,6 +416,7 @@ func TestRunWithEmptyQueueDoesNothing(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -425,6 +445,7 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -463,6 +484,7 @@ func TestRunSucceedsWhenEveryDocDeclines(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -512,6 +534,7 @@ func TestRunFailsWhenWriterEchoesUnchangedContent(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -544,6 +567,7 @@ func TestRunFailsWhenDocWriterReturnsEmptyOutput(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -573,6 +597,7 @@ func TestRunNoNewTranscriptEntriesIsNotAFailure(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -590,7 +615,7 @@ func TestBuildDocPromptIncludesOwnContentAndEntries(t *testing.T) {
 	entries := []scribe.Entry{
 		{Role: "user", Text: "do the thing", Timestamp: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)},
 	}
-	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck, testRedactor())
 	for _, want := range []string{"log content", "do the thing", noChangeSentinel} {
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
@@ -606,7 +631,7 @@ func TestBuildDocPromptIncludesOwnContentAndEntries(t *testing.T) {
 // never show up.
 func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
-	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck, testRedactor())
 
 	leaks := []string{
 		"one block per decision",   // DECISIONS guidance
@@ -632,12 +657,12 @@ func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "scrapping the plan"}}
 
-	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries, CodeWeightCheck)
+	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries, CodeWeightCheck, testRedactor())
 	if !contains(projectPrompt, "normal case") || !contains(projectPrompt, "remove that") {
 		t.Fatalf("PROJECT prompt missing correction-path guidance:\n%s", projectPrompt)
 	}
 
-	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries, CodeWeightCheck)
+	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries, CodeWeightCheck, testRedactor())
 	if !contains(decisionsPrompt, "dropped") || !contains(decisionsPrompt, "why") {
 		t.Fatalf("DECISIONS prompt missing correction-path guidance:\n%s", decisionsPrompt)
 	}
@@ -651,7 +676,7 @@ func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
 // filler.
 func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
-	prompt := buildDocPrompt(scribe.DocJournal, "current", entries, CodeWeightCheck)
+	prompt := buildDocPrompt(scribe.DocJournal, "current", entries, CodeWeightCheck, testRedactor())
 
 	for _, want := range []string{
 		"confidently wrong", // what it wants
@@ -672,7 +697,7 @@ func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
 func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "shipped it"}}
 
-	check := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightCheck)
+	check := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightCheck, testRedactor())
 	if !contains(check, "verify") {
 		t.Fatalf("CodeWeightCheck prompt should say 'verify':\n%s", check)
 	}
@@ -680,12 +705,12 @@ func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
 		t.Fatalf("CodeWeightCheck prompt should not offer to source content from code:\n%s", check)
 	}
 
-	full := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightFull)
+	full := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightFull, testRedactor())
 	if !contains(full, "may use it to source") {
 		t.Fatalf("CodeWeightFull prompt should say it may source content from code:\n%s", full)
 	}
 
-	off := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightOff)
+	off := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightOff, testRedactor())
 	if !contains(off, "do not have code access") {
 		t.Fatalf("CodeWeightOff prompt should say code access is off:\n%s", off)
 	}
@@ -745,7 +770,7 @@ func TestParseGateOutput(t *testing.T) {
 // gateProductLevel called the writer anyway and ignored the answer.
 func TestGateProductLevelSkipsClassificationWithoutKeywordHit(t *testing.T) {
 	w := &fakeWriter{}
-	deps := Deps{Writer: w}
+	deps := Deps{Writer: w, Redactor: testRedactor()}
 	entries := []scribe.Entry{{Role: "user", Text: "fixed a typo"}}
 
 	gateIn, err := gateProductLevel(deps, entries)
@@ -765,7 +790,7 @@ func TestGateProductLevelSkipsClassificationWithoutKeywordHit(t *testing.T) {
 // classifier, whose answer is what actually decides.
 func TestGateProductLevelAsksClassifierOnKeywordHit(t *testing.T) {
 	w := &fakeWriter{outputs: []string{"NO"}}
-	deps := Deps{Writer: w}
+	deps := Deps{Writer: w, Redactor: testRedactor()}
 	entries := []scribe.Entry{{Role: "user", Text: "we decided to drop the queue idea"}}
 
 	gateIn, err := gateProductLevel(deps, entries)
@@ -816,6 +841,7 @@ func TestPartialDocFailureKeepsTheDocsThatSucceeded(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w, Log: &log,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -853,6 +879,7 @@ func TestGateFailureDoesNotDiscardHistoryEdits(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -882,6 +909,7 @@ func TestAllDocCallsFailingIsStillAFailedRun(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor:       testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {

@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/Sahil-796/scribe/internal/docs"
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -96,6 +97,17 @@ type Deps struct {
 	LoadOffset     OffsetLoader
 	SaveOffset     OffsetSaver
 
+	// Redactor is the phase 04 choke point every prompt builder in this
+	// package sends its assembled text through before a writer ever sees
+	// it (prompt.go's buildDocPrompt, buildGatePrompt and
+	// projectRewriteNotice all take it and redact their own output). It is
+	// required, not optional, unlike every other knob on this struct: Run
+	// rejects a nil Redactor with an error rather than falling back to
+	// sending content unredacted, because that fallback's failure mode is
+	// silent and permanent — see docs/phases/04-config-and-safety.md and
+	// internal/redact's package doc.
+	Redactor *redact.Redactor
+
 	// CodeWeight controls the per-doc prompts' code-access instructions.
 	// Zero value (empty string) behaves as CodeWeightCheck.
 	CodeWeight CodeWeight
@@ -148,6 +160,14 @@ func (d Deps) logf(format string, args ...any) {
 // flag when it finishes and cover this trigger itself. This is the "busy?
 // -> mark pending, exit" branch in docs/PLAN.md's loop diagram.
 func Run(deps Deps) error {
+	// A nil Redactor must never behave like "redaction is off" — that
+	// fallback would be indistinguishable from working correctly right up
+	// until a real secret ships in a prompt, at which point it's too late
+	// to notice. Fail the run instead, loudly, before anything is read.
+	if deps.Redactor == nil {
+		return errors.New("worker: Deps.Redactor is required (a nil redactor would silently skip redaction — see internal/redact)")
+	}
+
 	got, err := deps.Queue.TryLock()
 	if err != nil {
 		return fmt.Errorf("worker: acquire lock: %w", err)
@@ -401,7 +421,7 @@ func collectEdits(deps Deps, current map[scribe.Doc]string, entries []scribe.Ent
 
 		extra := ""
 		if after, rewritten := result[scribe.DocProject]; rewritten {
-			extra = projectRewriteNotice(current[scribe.DocProject], after)
+			extra = projectRewriteNotice(current[scribe.DocProject], after, deps.Redactor)
 		}
 		if err := runDocWriterWithContext(deps, scribe.DocDecisions, current, entries, extra, result); err != nil {
 			errs = append(errs, err)
@@ -450,7 +470,7 @@ func gateProductLevel(deps Deps, entries []scribe.Entry) (bool, error) {
 	if !keywordPrefilter(entries) {
 		return false, nil
 	}
-	out, err := deps.Writer.Run(buildGatePrompt(entries))
+	out, err := deps.Writer.Run(buildGatePrompt(entries, deps.Redactor))
 	if err != nil {
 		return false, fmt.Errorf("worker: gate classification run: %w", err)
 	}
@@ -467,7 +487,7 @@ func runDocWriter(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entrie
 // after the standard per-doc prompt. Only the correction path uses it, to
 // tell DECISIONS.md what PROJECT.md just changed; everything else passes "".
 func runDocWriterWithContext(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entries []scribe.Entry, extra string, result edits) error {
-	prompt := buildDocPrompt(d, current[d], entries, deps.codeWeight()) + extra
+	prompt := buildDocPrompt(d, current[d], entries, deps.codeWeight(), deps.Redactor) + extra
 	out, err := deps.Writer.Run(prompt)
 	if err != nil {
 		return fmt.Errorf("worker: writer run for %s: %w", d, err)
