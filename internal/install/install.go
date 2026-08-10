@@ -50,11 +50,13 @@ type hookGroup struct {
 	Hooks   []hookEntry `json:"hooks"`
 }
 
-// HookResult describes what InstallStopHook did, so the caller can report it.
+// HookResult describes what InstallStopHook (or InstallEventHook /
+// RemoveEventHook) did, so the caller can report it.
 type HookResult struct {
 	SettingsPath   string // the file written
 	Added          bool   // a new hook entry was added
 	AlreadyPresent bool   // an equivalent scribe hook was already installed
+	Removed        bool   // RemoveEventHook only: a hook entry was removed
 	Backup         string // path to the backup taken before writing, if any
 }
 
@@ -70,25 +72,128 @@ func InstallStopHook(repoRoot, scribeBinPath string) (HookResult, error) {
 	if repoRoot == "" {
 		return HookResult{}, errors.New("install: repoRoot is empty")
 	}
+	settingsPath := filepath.Join(repoRoot, settingsRelPath)
+	return installHookCommand(settingsPath, stopEventName, "hook", scribeBinPath)
+}
+
+// StopHookInstalled reports whether repoRoot already has a scribe Stop hook
+// installed in its project-level Claude Code settings.
+func StopHookInstalled(repoRoot string) (bool, error) {
+	if repoRoot == "" {
+		return false, errors.New("install: repoRoot is empty")
+	}
+	settingsPath := filepath.Join(repoRoot, settingsRelPath)
+	return hookCommandInstalled(settingsPath, stopEventName, "hook")
+}
+
+// InstallEventHook installs a single-command hook — "<scribeBinPath>
+// <subcommand>" — under eventName in the settings file at settingsPath.
+// This is InstallStopHook's machinery generalised to take the event and the
+// settings path as arguments instead of hardcoding "Stop" and the
+// project-level path, built for internal/nudge's SessionStart hook in the
+// user's *global* Claude settings (~/.claude/settings.json) — a different
+// event, a different file, and (unlike the project-level Stop hook, which
+// everyone on the repo shares) a file that belongs to the user, not to
+// scribe. Same round-tripping, same backup-before-write safety, same
+// idempotency contract either way — see installHookCommand.
+func InstallEventHook(settingsPath, eventName, subcommand, scribeBinPath string) (HookResult, error) {
+	return installHookCommand(settingsPath, eventName, subcommand, scribeBinPath)
+}
+
+// EventHookInstalled is InstallEventHook's read-only counterpart: whether a
+// scribe-owned hook for (eventName, subcommand) is already present at
+// settingsPath.
+func EventHookInstalled(settingsPath, eventName, subcommand string) (bool, error) {
+	return hookCommandInstalled(settingsPath, eventName, subcommand)
+}
+
+// RemoveEventHook removes any scribe-owned hook for (eventName, subcommand)
+// from settingsPath, taking a backup first if the file is actually
+// modified. Idempotent: removing an absent hook is a no-op (Removed=false,
+// no backup taken, no write), not an error — "scribe nudge --remove" needs
+// to be safe to run more than once, or against a settings file where the
+// hook was already removed by hand.
+//
+// There is no RemoveStopHook alongside this: nothing in scribe today ever
+// uninstalls the project-level Stop hook, so that half of the
+// generalisation stays unbuilt until something needs it.
+func RemoveEventHook(settingsPath, eventName, subcommand string) (HookResult, error) {
+	doc, existed, err := readSettings(settingsPath)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("install: reading %s: %w", settingsPath, err)
+	}
+	if !existed {
+		return HookResult{SettingsPath: settingsPath}, nil
+	}
+
+	groups, err := doc.eventGroups(eventName)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("install: parsing %s hooks in %s: %w", eventName, settingsPath, err)
+	}
+
+	kept := make([]hookGroup, 0, len(groups))
+	removed := false
+	for _, g := range groups {
+		keptHooks := make([]hookEntry, 0, len(g.Hooks))
+		for _, h := range g.Hooks {
+			if isScribeSubcommand(h.Command, subcommand) {
+				removed = true
+				continue
+			}
+			keptHooks = append(keptHooks, h)
+		}
+		if len(keptHooks) == 0 {
+			continue // drop groups left with no hooks at all
+		}
+		g.Hooks = keptHooks
+		kept = append(kept, g)
+	}
+
+	if !removed {
+		return HookResult{SettingsPath: settingsPath}, nil
+	}
+	doc.setEventGroups(eventName, kept)
+
+	out, err := doc.marshal()
+	if err != nil {
+		return HookResult{}, fmt.Errorf("install: encoding %s: %w", settingsPath, err)
+	}
+	backup, err := backupFile(settingsPath)
+	if err != nil {
+		return HookResult{}, fmt.Errorf("install: backing up %s: %w", settingsPath, err)
+	}
+	if err := atomicWrite(settingsPath, out); err != nil {
+		return HookResult{}, fmt.Errorf("install: writing %s: %w", settingsPath, err)
+	}
+
+	return HookResult{SettingsPath: settingsPath, Removed: true, Backup: backup}, nil
+}
+
+// installHookCommand is the shared machinery behind InstallStopHook and
+// InstallEventHook: round-trip settingsPath, look for a scribe-owned hook
+// already covering (eventName, subcommand), and append a new one-hook group
+// invoking "<scribeBinPath> <subcommand>" if none is found. A backup of the
+// pre-existing file is written before any modification, so a bad merge is
+// always one file copy away from undone — whether that file is a project's
+// shared .claude/settings.json or the user's own global one.
+func installHookCommand(settingsPath, eventName, subcommand, scribeBinPath string) (HookResult, error) {
 	if scribeBinPath == "" {
 		return HookResult{}, errors.New("install: scribeBinPath is empty")
 	}
-
-	settingsPath := filepath.Join(repoRoot, settingsRelPath)
 
 	doc, existed, err := readSettings(settingsPath)
 	if err != nil {
 		return HookResult{}, fmt.Errorf("install: reading %s: %w", settingsPath, err)
 	}
 
-	stopGroups, err := doc.stopGroups()
+	groups, err := doc.eventGroups(eventName)
 	if err != nil {
-		return HookResult{}, fmt.Errorf("install: parsing Stop hooks in %s: %w", settingsPath, err)
+		return HookResult{}, fmt.Errorf("install: parsing %s hooks in %s: %w", eventName, settingsPath, err)
 	}
 
-	for _, g := range stopGroups {
+	for _, g := range groups {
 		for _, h := range g.Hooks {
-			if isScribeHookCommand(h.Command) {
+			if isScribeSubcommand(h.Command, subcommand) {
 				return HookResult{
 					SettingsPath:   settingsPath,
 					Added:          false,
@@ -98,13 +203,13 @@ func InstallStopHook(repoRoot, scribeBinPath string) (HookResult, error) {
 		}
 	}
 
-	stopGroups = append(stopGroups, hookGroup{
+	groups = append(groups, hookGroup{
 		Hooks: []hookEntry{{
 			Type:    "command",
-			Command: hookCommand(scribeBinPath),
+			Command: subcommandCommand(scribeBinPath, subcommand),
 		}},
 	})
-	doc.setStopGroups(stopGroups)
+	doc.setEventGroups(eventName, groups)
 
 	out, err := doc.marshal()
 	if err != nil {
@@ -133,14 +238,8 @@ func InstallStopHook(repoRoot, scribeBinPath string) (HookResult, error) {
 	}, nil
 }
 
-// StopHookInstalled reports whether repoRoot already has a scribe Stop hook
-// installed in its project-level Claude Code settings.
-func StopHookInstalled(repoRoot string) (bool, error) {
-	if repoRoot == "" {
-		return false, errors.New("install: repoRoot is empty")
-	}
-	settingsPath := filepath.Join(repoRoot, settingsRelPath)
-
+// hookCommandInstalled is installHookCommand's read-only counterpart.
+func hookCommandInstalled(settingsPath, eventName, subcommand string) (bool, error) {
 	doc, existed, err := readSettings(settingsPath)
 	if err != nil {
 		return false, fmt.Errorf("install: reading %s: %w", settingsPath, err)
@@ -149,14 +248,14 @@ func StopHookInstalled(repoRoot string) (bool, error) {
 		return false, nil
 	}
 
-	stopGroups, err := doc.stopGroups()
+	groups, err := doc.eventGroups(eventName)
 	if err != nil {
-		return false, fmt.Errorf("install: parsing Stop hooks in %s: %w", settingsPath, err)
+		return false, fmt.Errorf("install: parsing %s hooks in %s: %w", eventName, settingsPath, err)
 	}
 
-	for _, g := range stopGroups {
+	for _, g := range groups {
 		for _, h := range g.Hooks {
-			if isScribeHookCommand(h.Command) {
+			if isScribeSubcommand(h.Command, subcommand) {
 				return true, nil
 			}
 		}
@@ -164,25 +263,35 @@ func StopHookInstalled(repoRoot string) (bool, error) {
 	return false, nil
 }
 
-// hookCommand builds the shell command scribe installs as the Stop hook.
-// scribeBinPath is quoted so a path containing spaces still works; the
-// result is what Claude Code hands to `sh -c`.
-func hookCommand(scribeBinPath string) string {
-	return fmt.Sprintf("%q hook", scribeBinPath)
+// subcommandCommand builds the shell command scribe installs for a hook:
+// the scribe binary, quoted so a path containing spaces still works,
+// followed by the subcommand the hook should invoke ("hook" for Stop,
+// "nudge" for SessionStart). The result is what Claude Code hands to `sh -c`.
+func subcommandCommand(scribeBinPath, subcommand string) string {
+	return fmt.Sprintf("%q %s", scribeBinPath, subcommand)
 }
 
 // isScribeHookCommand reports whether cmd looks like a command this package
-// installed: it ends in the "hook" subcommand and the binary invoked is
-// (or is named) scribe. This is deliberately loose rather than an exact
-// string match against hookCommand's current output, so a scribe binary
-// moved to a different path (or invoked via a wrapper) is still recognized
-// as "already installed" instead of producing a duplicate entry.
+// installed as the Stop hook. Kept as a named wrapper (rather than inlining
+// isScribeSubcommand(cmd, "hook") at both call sites) because it predates
+// the generalisation and install_test.go tests it by name.
 func isScribeHookCommand(cmd string) bool {
+	return isScribeSubcommand(cmd, "hook")
+}
+
+// isScribeSubcommand reports whether cmd looks like a command this package
+// installed for the given subcommand: cmd ends in subcommand and the binary
+// invoked is (or is named) scribe. This is deliberately loose rather than
+// an exact string match against subcommandCommand's current output, so a
+// scribe binary moved to a different path (or invoked via a wrapper) is
+// still recognized as "already installed" instead of producing a duplicate
+// entry.
+func isScribeSubcommand(cmd, subcommand string) bool {
 	trimmed := strings.TrimSpace(cmd)
-	if !strings.HasSuffix(trimmed, "hook") {
+	if !strings.HasSuffix(trimmed, subcommand) {
 		return false
 	}
-	binPart := strings.TrimSpace(strings.TrimSuffix(trimmed, "hook"))
+	binPart := strings.TrimSpace(strings.TrimSuffix(trimmed, subcommand))
 	binPart = strings.Trim(binPart, `"'`)
 	if binPart == "" {
 		return false
@@ -289,10 +398,12 @@ func readSettings(path string) (settingsDoc, bool, error) {
 	return settingsDoc{root: root}, true, nil
 }
 
-// stopGroups returns the current "hooks"."Stop" array, decoded. Any other
-// event under "hooks" (PreToolUse, PostToolUse, ...) is left as raw JSON in
-// doc.hooks and is never touched.
-func (d *settingsDoc) stopGroups() ([]hookGroup, error) {
+// eventGroups returns the current "hooks".<eventName> array, decoded. Any
+// other event under "hooks" is left as raw JSON in doc.hooks and is never
+// touched. Generalised from the phase 02 version (which only ever read
+// "Stop") so InstallEventHook/RemoveEventHook can drive an arbitrary event
+// — SessionStart, for internal/nudge — through the same round-tripping.
+func (d *settingsDoc) eventGroups(eventName string) ([]hookGroup, error) {
 	if d.hooks == nil {
 		d.hooks = map[string]json.RawMessage{}
 		if raw, ok := d.root["hooks"]; ok && len(raw) > 0 {
@@ -302,26 +413,26 @@ func (d *settingsDoc) stopGroups() ([]hookGroup, error) {
 		}
 	}
 
-	raw, ok := d.hooks[stopEventName]
+	raw, ok := d.hooks[eventName]
 	if !ok || len(raw) == 0 {
 		return nil, nil
 	}
 	var groups []hookGroup
 	if err := json.Unmarshal(raw, &groups); err != nil {
-		return nil, fmt.Errorf(`"hooks"."Stop" is not an array of hook groups: %w`, err)
+		return nil, fmt.Errorf(`"hooks".%q is not an array of hook groups: %w`, eventName, err)
 	}
 	return groups, nil
 }
 
-// setStopGroups stages groups as the new "hooks"."Stop" value. Call
+// setEventGroups stages groups as the new "hooks".<eventName> value. Call
 // marshal() afterward to fold it (and every untouched key) back into JSON.
-func (d *settingsDoc) setStopGroups(groups []hookGroup) {
+func (d *settingsDoc) setEventGroups(eventName string, groups []hookGroup) {
 	if d.hooks == nil {
 		d.hooks = map[string]json.RawMessage{}
 	}
 	// marshal error is impossible for a []hookGroup of plain strings/ints.
 	raw, _ := json.Marshal(groups)
-	d.hooks[stopEventName] = raw
+	d.hooks[eventName] = raw
 }
 
 // marshal folds d.hooks back into d.root (if it was ever touched) and
