@@ -159,7 +159,7 @@ func doctorChecks() []doctorCheck {
 	checks = append(checks, doctorHookCheck(repoRoot))
 	checks = append(checks, doctorDocsCheck(repoRoot, cfg))
 
-	w, writerErr := newDoctorWriter(writer.Config{Agent: cfg.Agent, Model: cfg.Model, Timeout: doctorWriterTimeout})
+	w, writerErr := newDoctorWriter(writer.Config{Agent: cfg.Agent, Model: cfg.Model, Command: cfg.Command, Args: cfg.Args, Timeout: doctorWriterTimeout})
 	checks = append(checks, doctorPathCheck(cfg, writerErr))
 	checks = append(checks, doctorTrivialPromptCheck(w, writerErr))
 

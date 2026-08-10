@@ -51,6 +51,20 @@ type Config struct {
 	// silently wrong rather than absent, which is worse than not asking.
 	Layout string `json:"layout"`
 
+	// Command and Args carry the raw command line for Agent == "custom",
+	// docs/PLAN.md decision 6's escape hatch ("unsupported meaning
+	// unsupported: if it breaks, that's yours"). Without somewhere to
+	// record them, selecting the custom connector from config was
+	// impossible — writer.New has no way to be handed a command and fails
+	// every time — so the escape hatch existed in the writer package and
+	// nowhere a user could reach. Ignored by every named connector.
+	//
+	// Args wins over Command when both are set, matching writer.Config:
+	// Command is whitespace-split and cannot express an argument
+	// containing a space.
+	Command string   `json:"command,omitempty"`
+	Args    []string `json:"args,omitempty"`
+
 	// Code controls how much the writer may lean on reading the repo.
 	Code CodeConfig `json:"code"`
 

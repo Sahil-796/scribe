@@ -94,7 +94,7 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("scribe run: %w", err)
 	}
 
-	w, err := newWriterForRun(writer.Config{Agent: cfg.Agent, Model: cfg.Model})
+	w, err := newWriterForRun(writer.Config{Agent: cfg.Agent, Model: cfg.Model, Command: cfg.Command, Args: cfg.Args})
 	if err != nil {
 		return fmt.Errorf("scribe run: %w", err)
 	}
