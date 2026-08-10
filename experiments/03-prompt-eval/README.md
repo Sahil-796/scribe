@@ -45,12 +45,15 @@ session files themselves are not committed — `corpus.json` holds only the
 coordinates (session id, line range, byte range), same posture as
 `experiments/00-model-bakeoff`'s "transcripts are secrets" note. A run only
 works on a machine that actually has `~/.claude/projects/-Users-sahil-work-pa/`
-populated with these session ids. `runs/baseline-live/*.prompt.txt` (see
-below) *do* contain the short excerpted entries themselves, not just
-coordinates — committed deliberately, since this is this repo's own
-development conversation about this project, not another repo's private
-content, and each excerpt is 24-50KB out of a multi-hundred-KB session, not
-a full transcript dump.
+populated with these session ids. `runs/**/*.prompt.txt` (see below) *do*
+contain the short excerpted entries themselves, not just coordinates — which
+is why they are **not** committed. An earlier pass argued they were safe to
+commit (this repo's own development conversation, 24-50KB excerpts rather
+than full dumps) and two of them were; that call was reversed before the
+phase 03 merge, the files were scrubbed from the branch's history, and
+`.gitignore` now blocks `experiments/03-prompt-eval/runs/**/*.prompt.txt`.
+A `.prompt.txt` is reproducible from `corpus.json` plus the variant on any
+machine that has the sessions, so nothing is lost by keeping them local.
 
 **Known simplification:** every corpus item is evaluated against empty
 "current doc" state ("(not yet created)" for all four docs), because these
@@ -87,8 +90,10 @@ separate LLM-judge pass, not built) to read both and score.
 
 Default agent is `opencode` / `opencode/longcat-2.0-free`, same defaults
 `internal/writer` uses. `-agent`/`-model` exist for completeness but this
-unit only tested `opencode` — no `codex` (broken install on this machine, per
-the brief), no real `claude` sessions.
+unit only tested `opencode` — no `codex`, no real `claude` sessions. (codex's
+install was broken when this was written; it was repaired on 2026-08-10, but
+nothing here has been re-run against it and codex is still unverified as a
+writer connector.)
 
 ## What was actually run
 
