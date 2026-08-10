@@ -8,6 +8,13 @@
 // This package does not import internal/queue. The caller supplies an
 // EnqueueFunc matching queue.Enqueue's exact signature, which keeps this
 // package buildable and testable on its own.
+//
+// It does import internal/install, to answer one question — is this repo
+// paused? — that the enqueue decision itself depends on and can't be
+// deferred to the caller the way queue.Enqueue is: a pause that still
+// enqueues is a delay, not a pause (see isPaused). install.ReadConfig is a
+// single small file read with no further dependencies, so this stays
+// within the "as little as possible" rule above rather than breaking it.
 package hook
 
 import (
@@ -18,6 +25,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/install"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -83,6 +91,16 @@ func Run(r io.Reader, stderr io.Writer, enqueue EnqueueFunc) int {
 		return ExitOK
 	}
 
+	if isPaused(root) {
+		// scribe off: same shape as the uninitialised-repo branch above —
+		// off is the default answer to "should this hook do anything", and
+		// a pause is just another way of getting there. Enqueueing here
+		// and relying on the pause to stop the *worker* instead would make
+		// "off" a delay, not a pause: the queue would just dump everything
+		// on the writer the moment the pause lapsed.
+		return ExitOK
+	}
+
 	if enqueue == nil {
 		const reason = "internal error: no enqueue function configured"
 		fmt.Fprintln(stderr, "scribe hook: "+reason)
@@ -111,6 +129,22 @@ func Run(r io.Reader, stderr io.Writer, enqueue EnqueueFunc) int {
 	}
 
 	return ExitOK
+}
+
+// isPaused reports whether scribe is paused for repoRoot right now. Any
+// failure reading the config — including install.ErrNotInitialised, which
+// legitimately happens here because FindRepoRoot only checked for a
+// .scribe directory, not a config.json inside it — is treated as "not
+// paused". That keeps this in line with the hook's one hard rule: a
+// config read that can fail must never turn into the hook behaving
+// differently because of an unrelated I/O problem or a malformed file.
+// Pausing is opt-in state a broken read must not go on to manufacture.
+func isPaused(repoRoot string) bool {
+	cfg, err := install.ReadConfig(repoRoot)
+	if err != nil {
+		return false
+	}
+	return cfg.IsPaused(time.Now())
 }
 
 // FindRepoRoot walks up from cwd looking for a scribe.StateDir (".scribe")
