@@ -268,7 +268,7 @@ func TestRun_EmitsAndChunks(t *testing.T) {
 	var progressLabels []string
 	var progressStatuses []ChunkStatus
 
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot:           tmp,
 		Writer:             w,
 		Sessions:           []Session{{ID: "sess", Path: sessPath}},
@@ -326,7 +326,7 @@ func TestRun_NilProgressAndEmit(t *testing.T) {
 
 	w := &fakeWriter{responses: []string{`{"CHANGELOG.md":"x"}`}}
 
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot: tmp,
 		Writer:   w,
 		Sessions: []Session{{ID: "sess", Path: sessPath}},
@@ -352,7 +352,7 @@ func TestRun_ResumesAfterFailure(t *testing.T) {
 		errs:      map[int]error{2: errors.New("writer boom")},
 	}
 	var got1 []emitted
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot:           tmp,
 		Writer:             w1,
 		Sessions:           []Session{{ID: "sess", Path: sessPath}},
@@ -378,7 +378,7 @@ func TestRun_ResumesAfterFailure(t *testing.T) {
 	// changelog then journal).
 	w2 := &fakeWriter{responses: []string{`{}`, `{"JOURNAL.md":"chunk1"}`}}
 	var got2 []emitted
-	err = Run(Options{
+	err = Run(Options{Redactor: testRedactor(),
 		RepoRoot:           tmp,
 		Writer:             w2,
 		Sessions:           []Session{{ID: "sess", Path: sessPath}},
@@ -414,7 +414,7 @@ func TestRun_CorruptStateDegradesToStartOver(t *testing.T) {
 	}
 
 	w := &fakeWriter{responses: []string{`{"CHANGELOG.md":"x"}`}}
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot:  tmp,
 		Writer:    w,
 		Sessions:  []Session{{ID: "sess", Path: sessPath}},
@@ -435,7 +435,7 @@ func TestRun_ParseFailureRecordedNotSilentSuccess(t *testing.T) {
 
 	w := &fakeWriter{responses: []string{"this is not json"}}
 	var emitCalls int
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot: tmp,
 		Writer:   w,
 		Sessions: []Session{{ID: "sess", Path: sessPath}},
@@ -459,7 +459,7 @@ func TestRun_EmitFailureNotMarkedComplete(t *testing.T) {
 	statePath := filepath.Join(tmp, ".scribe", "replay.json")
 
 	w := &fakeWriter{responses: []string{`{"CHANGELOG.md":"x"}`}}
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot:  tmp,
 		Writer:    w,
 		Sessions:  []Session{{ID: "sess", Path: sessPath}},
@@ -484,7 +484,7 @@ func TestRun_DefaultStatePath(t *testing.T) {
 	writeFixture(t, sessPath, 2)
 
 	w := &fakeWriter{responses: []string{`{}`}}
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot: tmp,
 		Writer:   w,
 		Sessions: []Session{{ID: "sess", Path: sessPath}},
@@ -500,10 +500,10 @@ func TestRun_DefaultStatePath(t *testing.T) {
 }
 
 func TestRun_RequiresWriterAndRepoRoot(t *testing.T) {
-	if err := Run(Options{RepoRoot: "x"}); err == nil {
+	if err := Run(Options{Redactor: testRedactor(), RepoRoot: "x"}); err == nil {
 		t.Error("expected error for missing Writer")
 	}
-	if err := Run(Options{Writer: &fakeWriter{}}); err == nil {
+	if err := Run(Options{Redactor: testRedactor(), Writer: &fakeWriter{}}); err == nil {
 		t.Error("expected error for missing RepoRoot")
 	}
 }
@@ -529,7 +529,7 @@ func TestRun_UsesGivenSessionsOrder(t *testing.T) {
 		`{}`, `{"JOURNAL.md":"second"}`, // session s1's chunk
 	}}
 	var order []string
-	err := Run(Options{
+	err := Run(Options{Redactor: testRedactor(),
 		RepoRoot: tmp,
 		Writer:   w,
 		Sessions: []Session{

@@ -395,7 +395,7 @@ func TestRun(t *testing.T) {
 		writeFile(t, filepath.Join(root, "README.md"), "# Thing")
 
 		w := &fakeWriter{responses: []string{"seeded project", "seeded decisions"}}
-		got, err := Run(root, w)
+		got, err := Run(root, w, testRedactor())
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -429,7 +429,7 @@ func TestRun(t *testing.T) {
 	t.Run("propagates writer error on the project call", func(t *testing.T) {
 		root := t.TempDir()
 		w := &fakeWriter{err: errors.New("boom")}
-		_, err := Run(root, w)
+		_, err := Run(root, w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from writer failure")
 		}
@@ -441,7 +441,7 @@ func TestRun(t *testing.T) {
 	t.Run("propagates writer error on the decisions call", func(t *testing.T) {
 		root := t.TempDir()
 		w := &fakeWriter{out: "seeded project", errs: map[int]error{1: errors.New("boom")}}
-		_, err := Run(root, w)
+		_, err := Run(root, w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from writer failure on the second call")
 		}
@@ -453,7 +453,7 @@ func TestRun(t *testing.T) {
 	t.Run("propagates parse error on empty writer output", func(t *testing.T) {
 		root := t.TempDir()
 		w := &fakeWriter{out: ""}
-		_, err := Run(root, w)
+		_, err := Run(root, w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from empty writer output")
 		}
@@ -461,7 +461,7 @@ func TestRun(t *testing.T) {
 
 	t.Run("propagates scan error on bad repo root", func(t *testing.T) {
 		w := &fakeWriter{responses: []string{"x", "y"}}
-		_, err := Run(filepath.Join(t.TempDir(), "missing"), w)
+		_, err := Run(filepath.Join(t.TempDir(), "missing"), w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from missing repo root")
 		}

@@ -58,6 +58,15 @@ type DocStore interface {
 	ReadAll() (map[scribe.Doc]string, error)
 	WriteState(doc scribe.Doc, content string) error
 	AppendHistory(doc scribe.Doc, entry string) error
+
+	// ResetRun starts a fresh before/after snapshot for `scribe diff`.
+	// Part of the interface rather than an optional type assertion on the
+	// concrete store: the snapshot recorder is a deliberate no-op until
+	// ResetRun has been called, so a DocStore that quietly lacked this
+	// would leave `scribe diff` permanently answering "no run has been
+	// recorded yet" while every test still passed. Making it a method
+	// everyone must implement is what turns that into a compile error.
+	ResetRun() error
 }
 
 // TranscriptReader matches internal/transcript.Read's signature.
@@ -213,6 +222,20 @@ func Run(deps Deps) error {
 		return nil
 	}
 	defer deps.Queue.Unlock()
+
+	// Once per run, not once per drained batch: a run that loops on the
+	// pending flag (docs/PLAN.md's "pending set? run again") is still one
+	// run as far as `scribe diff` is concerned, and resetting inside the
+	// loop would throw away the earlier passes' before/after.
+	if err := deps.Docs.ResetRun(); err != nil {
+		// Not fatal. The snapshot exists so a human can ask what the last
+		// run changed; failing the actual doc-writing run because that
+		// debugging aid couldn't be initialised would be the tail wagging
+		// the dog. It degrades to "diff has nothing to show".
+		if deps.Log != nil {
+			fmt.Fprintf(deps.Log, "worker: could not start the run snapshot for `scribe diff`: %v\n", err)
+		}
+	}
 
 	for {
 		if err := runOnce(deps); err != nil {

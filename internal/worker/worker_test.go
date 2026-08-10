@@ -89,6 +89,10 @@ type fakeDocStore struct {
 	state    map[scribe.Doc]string
 	history  map[scribe.Doc][]string
 	writeErr error
+
+	// resetRuns counts ResetRun calls; see the method below.
+	resetRuns int
+	resetErr  error
 }
 
 func newFakeDocStore() *fakeDocStore {
@@ -120,6 +124,17 @@ func (f *fakeDocStore) WriteState(doc scribe.Doc, content string) error {
 	defer f.mu.Unlock()
 	f.state[doc] = content
 	return nil
+}
+
+// ResetRun records that the worker started a run snapshot. Counted rather
+// than ignored so a test can pin "exactly once per run, not once per
+// pending-flag loop" — the property that keeps `scribe diff` showing the
+// whole run rather than only its last pass.
+func (f *fakeDocStore) ResetRun() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resetRuns++
+	return f.resetErr
 }
 
 func (f *fakeDocStore) AppendHistory(doc scribe.Doc, entry string) error {
@@ -357,6 +372,45 @@ func TestRunReRunsWhenPendingFlagIsSet(t *testing.T) {
 	}
 	if q.lockCalls != 1 || q.unlockCalls != 1 {
 		t.Fatalf("expected the lock held across both iterations (1 lock/unlock cycle), got lock=%d unlock=%d", q.lockCalls, q.unlockCalls)
+	}
+	// The run snapshot `scribe diff` reads covers the whole run, so it is
+	// reset once — not once per pending-flag iteration, which would leave
+	// diff showing only whatever the final pass happened to touch.
+	if store.resetRuns != 1 {
+		t.Errorf("ResetRun called %d times across a two-iteration run, want exactly 1", store.resetRuns)
+	}
+}
+
+// The snapshot is a debugging aid, so failing to start it must not fail the
+// run that was actually asked for — the docs still get written, and
+// `scribe diff` degrades to having nothing to show.
+func TestRunSucceedsWhenTheRunSnapshotCannotBeStarted(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "did a thing"}}
+
+	store := newFakeDocStore()
+	store.resetErr = errors.New("disk full")
+	w := &fakeWriter{outputs: []string{"an entry", noChangeSentinel}}
+
+	var log bytes.Buffer
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
+		Log:      &log,
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run should survive a snapshot failure, got: %v", err)
+	}
+	if len(store.history[scribe.DocChangelog]) != 1 {
+		t.Errorf("the real doc write should still have happened, got %v", store.history[scribe.DocChangelog])
+	}
+	if !strings.Contains(log.String(), "snapshot") {
+		t.Errorf("the failure should be visible on Deps.Log, got %q", log.String())
 	}
 }
 

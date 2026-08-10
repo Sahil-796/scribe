@@ -287,10 +287,19 @@ func trimQuotedSpan(text string, start, end int) (int, int) {
 
 // applySpans sorts spans by start position (widest first at a shared
 // start, so e.g. a PEM block wins over a smaller match that happens to
-// start at the same offset) and rewrites text, replacing each
-// non-overlapping span with its placeholder. A span that overlaps one
-// already applied is dropped rather than double-redacted or spliced
-// incorrectly.
+// start at the same offset) and rewrites text, replacing each span with its
+// placeholder.
+//
+// The overlap rule is the load-bearing part. A span fully inside one
+// already applied is simply dropped — it's redacted already. A span that
+// *straddles* the boundary (starts inside an applied span, ends past it) is
+// not dropped: its tail is swallowed into the preceding placeholder
+// instead. Dropping it would have emitted that tail verbatim, which is the
+// one outcome this package exists to prevent. Whether two of the patterns
+// above can actually produce a straddling pair is not obvious either way,
+// and that is exactly why this is handled rather than reasoned about: the
+// cost of being wrong is a credential in someone else's logs, permanently,
+// and the cost of handling it is three lines.
 func applySpans(text string, spans []span) string {
 	if len(spans) == 0 {
 		return text
@@ -305,8 +314,14 @@ func applySpans(text string, spans []span) string {
 	var b strings.Builder
 	cursor := 0
 	for _, s := range spans {
+		if s.end <= cursor {
+			continue // wholly inside a span already applied
+		}
 		if s.start < cursor {
-			continue // overlaps a span already applied
+			// Straddles the boundary: absorb the tail rather than let it
+			// through. See this function's doc comment.
+			cursor = s.end
+			continue
 		}
 		b.WriteString(text[cursor:s.start])
 		fmt.Fprintf(&b, "[redacted:%s]", s.label)
