@@ -95,7 +95,8 @@ var ErrStateDocTooLarge = errors.New("docs: state doc content exceeds size cap")
 
 // Store is a handle on one repo's docs/scribe/ directory.
 type Store struct {
-	dir string // <repoRoot>/docs/scribe
+	repoRoot string // needed for lastrun.json, which lives under .scribe/, a sibling of docs/scribe/ rather than inside it
+	dir      string // <repoRoot>/docs/scribe
 
 	// stateCap and historyCap override DefaultStateCap and DefaultHistoryCap
 	// when non-zero. Set via SetCaps; zero (the zero value) means "use the
@@ -118,7 +119,7 @@ func Open(repoRoot string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("docs: create %s: %w", dir, err)
 	}
-	return &Store{dir: dir}, nil
+	return &Store{repoRoot: repoRoot, dir: dir}, nil
 }
 
 // SetCaps overrides this store's default size caps, in bytes. Pass 0 for
@@ -212,9 +213,20 @@ func (s *Store) WriteState(doc scribe.Doc, content string) error {
 	if cap := s.capFor(doc); int64(len(content)) > cap {
 		return fmt.Errorf("docs: %s content is %d bytes, over its %d byte cap: %w", doc, len(content), cap, ErrStateDocTooLarge)
 	}
+
+	// Captured before the write so the snapshot (see lastrun.go) has
+	// something to diff against. Read seeds the doc with its default
+	// header if this is the first write ever, which is exactly the right
+	// "before" for a doc going from nothing to something.
+	before, err := s.Read(doc)
+	if err != nil {
+		return err
+	}
+
 	if err := atomicWrite(s.Path(doc), []byte(content)); err != nil {
 		return fmt.Errorf("docs: write %s: %w", doc, err)
 	}
+	s.recordChange(doc, before, content)
 	return nil
 }
 
@@ -244,9 +256,11 @@ func (s *Store) AppendHistory(doc scribe.Doc, entry string) error {
 		return fmt.Errorf("docs: rotate %s: %w", doc, err)
 	}
 
-	if err := atomicWrite(s.Path(doc), []byte(serializeHistoryDoc(title, blocks))); err != nil {
+	after := serializeHistoryDoc(title, blocks)
+	if err := atomicWrite(s.Path(doc), []byte(after)); err != nil {
 		return fmt.Errorf("docs: append %s: %w", doc, err)
 	}
+	s.recordChange(doc, cur, after)
 	return nil
 }
 
