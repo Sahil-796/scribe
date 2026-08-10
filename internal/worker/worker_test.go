@@ -725,6 +725,35 @@ func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
 	}
 }
 
+// TestParseCodeWeight pins down the config-string-to-CodeWeight conversion
+// cmd/scribe/run.go needs (docs/phases/04-config-and-safety.md: "converting
+// a config string to a CodeWeight is a function someone else can call").
+// The three recognised values must round-trip exactly, and anything else —
+// typo, empty string, a value from some future config version — must be a
+// loud error rather than a silent fallback to the safe default.
+func TestParseCodeWeight(t *testing.T) {
+	valid := map[string]CodeWeight{
+		"check": CodeWeightCheck,
+		"full":  CodeWeightFull,
+		"off":   CodeWeightOff,
+	}
+	for in, want := range valid {
+		got, err := ParseCodeWeight(in)
+		if err != nil {
+			t.Errorf("ParseCodeWeight(%q): unexpected error: %v", in, err)
+		}
+		if got != want {
+			t.Errorf("ParseCodeWeight(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	for _, in := range []string{"", "Check", "CHECK", "checked", "verify", "unknown"} {
+		if _, err := ParseCodeWeight(in); err == nil {
+			t.Errorf("ParseCodeWeight(%q): expected an error, got nil", in)
+		}
+	}
+}
+
 func TestKeywordPrefilter(t *testing.T) {
 	tests := []struct {
 		text string

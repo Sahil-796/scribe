@@ -10,9 +10,12 @@
 // doc gets its own call, its own guidance, and only its own current
 // content, rather than one prompt trying to do four jobs at once — plus a
 // CodeWeight knob controlling how much each of those calls may lean on
-// read-only repo code access. Redaction and install-config plumbing are
-// still phase 04; CodeWeight lives only as a field on Deps here, not wired
-// to any config file yet.
+// read-only repo code access. Phase 04 finishes wiring both of phase 03's
+// deferred items: redaction (see prompt.go's use of *redact.Redactor) and
+// CodeWeight's path from config to prompt — ParseCodeWeight below is what a
+// caller (cmd/scribe/run.go) uses to turn install.Config.Code.Weight's
+// plain string into the CodeWeight this package expects, so a config file
+// can drive the same knob a Deps literal always could.
 //
 // This package depends on two sibling packages by contract, not by import:
 // internal/queue (unit 1B) and internal/transcript (unit 1C) were still
@@ -69,9 +72,7 @@ type OffsetSaver func(repoRoot string, o scribe.Offset) error
 // CodeWeight controls how much the writer's per-doc prompts tell it to lean
 // on its read-only repo code access, per locked decision 7 ("it can read
 // the code, but the transcript leads. Weighting is configurable; code
-// access can be turned off."). This is a worker Options knob, not config —
-// wiring it through internal/install's config file is phase 04 work and
-// outside this package's job.
+// access can be turned off.").
 type CodeWeight string
 
 const (
@@ -83,9 +84,42 @@ const (
 	// CodeWeightFull allows the writer to source doc content straight from
 	// the code, not just verify claims against it.
 	CodeWeightFull CodeWeight = "full"
-	// CodeWeightOff turns code access off for the writer entirely.
+	// CodeWeightOff turns code access off for the writer entirely: every
+	// per-doc prompt gets codeAccessInstructions' CodeWeightOff text
+	// ("You do not have code access for this run"), and none of them is
+	// told anything different — there is exactly one place in this
+	// package's prompts where code-access instructions are written
+	// (codeAccessInstructions in prompt.go), so "off" saying "off" there is
+	// the whole guarantee. Nothing in this package can stop the writer
+	// process itself from reading files (that's the connector's job, see
+	// internal/writer) — CodeWeight controls what the prompt *tells* the
+	// model to do with whatever access it has, the same way CodeWeightCheck
+	// relies on the model actually treating the repo as verification-only
+	// rather than a content source.
 	CodeWeightOff CodeWeight = "off"
 )
+
+// ParseCodeWeight converts install.Config's Code.Weight string
+// ("check"/"full"/"off") into a CodeWeight, for a caller wiring a repo's
+// config into Deps (cmd/scribe/run.go). This package can't reference
+// install.CodeWeightCheck etc. directly without importing internal/install,
+// which install.CodeConfig's own doc comment deliberately avoids the
+// reverse of (see internal/install/config.go: "kept as a string here so
+// this package stays free of a dependency on internal/worker") — so the
+// three literal strings are duplicated here, once, at the single point
+// they're parsed. An unrecognised value is a loud error, not a silent
+// fallback to CodeWeightCheck: a typo'd or corrupted config value silently
+// becoming "the safe default" would hide the fact that the operator's
+// actual setting was never honoured, which is a worse outcome than the run
+// simply refusing to start.
+func ParseCodeWeight(s string) (CodeWeight, error) {
+	switch CodeWeight(s) {
+	case CodeWeightCheck, CodeWeightFull, CodeWeightOff:
+		return CodeWeight(s), nil
+	default:
+		return "", fmt.Errorf("worker: unknown code weight %q (want %q, %q, or %q)", s, CodeWeightCheck, CodeWeightFull, CodeWeightOff)
+	}
+}
 
 // Deps wires the worker to the rest of the system. Every field is required
 // except CodeWeight, which defaults to CodeWeightCheck.
