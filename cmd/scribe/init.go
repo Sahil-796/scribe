@@ -12,6 +12,7 @@ import (
 
 	"github.com/Sahil-796/scribe/internal/docs"
 	"github.com/Sahil-796/scribe/internal/install"
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/replay"
 	"github.com/Sahil-796/scribe/internal/scribe"
 	"github.com/Sahil-796/scribe/internal/seed"
@@ -183,7 +184,20 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	fmt.Fprintf(out, "scribe init: %s\n\n", repoRoot)
 
-	preview, err := computePreview(repoRoot, w, out, errOut)
+	// The redactor for init's two passes comes from the user's global
+	// config, defaulted — there is no repo config yet, that's what init is
+	// about to write. Seeding reads the repo and replay reads every past
+	// transcript, so this is the largest volume of content scribe ever
+	// sends anywhere; doing it against the built-in defaults alone would
+	// ignore a globally-configured redact key on the one pass where it
+	// matters most.
+	globalCfg, err := install.GlobalDefaults()
+	if err != nil {
+		return fmt.Errorf("scribe init: %w", err)
+	}
+	red := redact.New(globalCfg.Privacy.Redact, globalCfg.Privacy.Ignore)
+
+	preview, err := computePreview(repoRoot, w, red, out, errOut)
 	if err != nil {
 		return err
 	}
@@ -225,9 +239,9 @@ func runInit(cmd *cobra.Command, _ []string) error {
 // nothing, and a first `scribe init` producing an empty PROJECT.md with no
 // error is exactly the failure mode that has to be caught here, not
 // discovered later by a confused user.
-func computePreview(repoRoot string, w scribe.Writer, out, errOut io.Writer) (map[scribe.Doc]string, error) {
+func computePreview(repoRoot string, w scribe.Writer, red *redact.Redactor, out, errOut io.Writer) (map[scribe.Doc]string, error) {
 	fmt.Fprintln(out, "Seeding PROJECT.md and DECISIONS.md from the repo...")
-	seeded, err := seed.Run(repoRoot, w)
+	seeded, err := seed.Run(repoRoot, w, red)
 	if err != nil {
 		// seed.Run's own Parse already refuses an empty/unparseable writer
 		// response, so this is already a loud failure, not a silent one.
@@ -262,6 +276,7 @@ func computePreview(repoRoot string, w scribe.Writer, out, errOut io.Writer) (ma
 	replayErr := replay.Run(replay.Options{
 		RepoRoot:  repoRoot,
 		Writer:    w,
+		Redactor:  red,
 		StatePath: previewStatePath(repoRoot),
 		Progress: func(status replay.ChunkStatus, done, total int, label string) {
 			if total == 0 {

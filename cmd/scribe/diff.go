@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Sahil-796/scribe/internal/docs"
-	"github.com/Sahil-796/scribe/internal/hook"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -36,7 +35,12 @@ func runDiff(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("scribe diff: %w", err)
 	}
-	root, ok := hook.FindRepoRoot(cwd)
+	// findGitRoot (.git), not hook.FindRepoRoot (.scribe): the question
+	// here is "is this a repo scribe could be on for", and .scribe only
+	// exists once init has already run. Asking the .scribe walker would
+	// make a never-initialised repo report "not a git repository" — the
+	// one case this command exists to explain.
+	root, ok := findGitRoot(cwd)
 	if !ok {
 		fmt.Fprintln(out, "Not a git repository — scribe has nothing to report here.")
 		return nil

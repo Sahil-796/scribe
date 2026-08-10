@@ -40,7 +40,12 @@ func runStatus(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("scribe status: %w", err)
 	}
-	root, ok := hook.FindRepoRoot(cwd)
+	// findGitRoot (.git), not hook.FindRepoRoot (.scribe): the question
+	// here is "is this a repo scribe could be on for", and .scribe only
+	// exists once init has already run. Asking the .scribe walker would
+	// make a never-initialised repo report "not a git repository" — the
+	// one case this command exists to explain.
+	root, ok := findGitRoot(cwd)
 	if !ok {
 		// Not even a git repo scribe could ever be initialised in. Not an
 		// error — see the package-level rule that status must always say

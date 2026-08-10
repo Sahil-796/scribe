@@ -126,3 +126,35 @@ func LayeredConfig(repoRoot string) (Config, error) {
 	}
 	return withDefaults(cfg), nil
 }
+
+// GlobalDefaults returns the user's global config alone, defaulted — what
+// applies to a repo that has no config of its own yet.
+//
+// This is `scribe init`'s case, and it exists specifically for the privacy
+// keys. Init runs the seed and replay passes, which together are the
+// largest volume of repo and transcript content scribe ever sends anywhere,
+// and they run *before* the repo config is written. Falling back to the
+// built-in defaults there would silently ignore a user who added, say,
+// "customer_id" to their global redact list — on the one pass where it
+// would matter most. A missing global file is not an error: the result is
+// then simply the built-in defaults.
+func GlobalDefaults() (Config, error) {
+	gPath, err := globalConfigPath()
+	if err != nil {
+		return Config{}, fmt.Errorf("install: %w", err)
+	}
+	globalFields, _, err := rawFields(gPath)
+	if err != nil {
+		return Config{}, fmt.Errorf("install: reading global config: %w", err)
+	}
+
+	data, err := json.Marshal(globalFields)
+	if err != nil {
+		return Config{}, fmt.Errorf("install: re-encoding global config: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("install: parsing global config: %w", err)
+	}
+	return withDefaults(cfg), nil
+}
