@@ -60,7 +60,7 @@ func TestCorrectionPathBothHalvesFireUpdatesProjectAndRecordsReason(t *testing.T
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -112,7 +112,7 @@ func TestCorrectionPathOnlyProjectFiresDropsClaimWithNoRecordedReason(t *testing
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w, Log: &log,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {

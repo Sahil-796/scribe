@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -23,18 +24,25 @@ import (
 // Splitting doubles the writer calls per chunk, which is the accepted
 // tradeoff during init (a one-off pass, not the ongoing per-turn loop) —
 // see the commit message for this change.
-func buildChangelogPrompt(entries []scribe.Entry) string {
+// r is phase 04's choke point (docs/phases/04-config-and-safety.md): the
+// fully assembled prompt is redacted in one pass right before it's
+// returned, the same way internal/worker's buildDocPrompt does it. r is
+// required — redact.Redactor.Redact panics on a nil receiver rather than
+// silently letting raw transcript text through, and that's deliberate: the
+// replay pass reads a whole repo's transcript history in one go, which is
+// exactly the bulk-exposure case redaction exists to prevent.
+func buildChangelogPrompt(entries []scribe.Entry, r *redact.Redactor) string {
 	var b strings.Builder
 	b.WriteString(changelogInstructions)
 	b.WriteString(renderChunk(entries))
-	return b.String()
+	return r.Redact(b.String())
 }
 
-func buildJournalPrompt(entries []scribe.Entry) string {
+func buildJournalPrompt(entries []scribe.Entry, r *redact.Redactor) string {
 	var b strings.Builder
 	b.WriteString(journalInstructions)
 	b.WriteString(renderChunk(entries))
-	return b.String()
+	return r.Redact(b.String())
 }
 
 // renderChunk renders the transcript entries shared by both prompt

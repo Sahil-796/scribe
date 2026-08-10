@@ -232,7 +232,7 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -269,7 +269,7 @@ func TestOffsetDoesNotAdvanceWhenWriterFails(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -298,7 +298,7 @@ func TestOffsetDoesNotAdvanceWhenDocWriteFails(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -342,7 +342,7 @@ func TestRunReRunsWhenPendingFlagIsSet(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: wrapped,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -393,7 +393,7 @@ func TestRunSkipsAndMarksPendingWhenLockAlreadyHeld(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -416,7 +416,7 @@ func TestRunWithEmptyQueueDoesNothing(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -445,7 +445,7 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -484,7 +484,7 @@ func TestRunSucceedsWhenEveryDocDeclines(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -534,7 +534,7 @@ func TestRunFailsWhenWriterEchoesUnchangedContent(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -567,7 +567,7 @@ func TestRunFailsWhenDocWriterReturnsEmptyOutput(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -597,7 +597,7 @@ func TestRunNoNewTranscriptEntriesIsNotAFailure(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -841,7 +841,7 @@ func TestPartialDocFailureKeepsTheDocsThatSucceeded(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w, Log: &log,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -879,7 +879,7 @@ func TestGateFailureDoesNotDiscardHistoryEdits(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -909,7 +909,7 @@ func TestAllDocCallsFailingIsStillAFailedRun(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {

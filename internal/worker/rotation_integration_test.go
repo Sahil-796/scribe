@@ -51,7 +51,7 @@ func runOneWorkerCycle(t *testing.T, store *docs.Store, tr *fakeTranscript, cycl
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
-		Redactor:       testRedactor(),
+		Redactor: testRedactor(),
 	}
 	if err := Run(deps); err != nil {
 		t.Fatalf("cycle %d: Run: %v", cycle, err)

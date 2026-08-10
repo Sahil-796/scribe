@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/Sahil-796/scribe/internal/redact"
 )
 
 // ProjectPrompt and DecisionsPrompt each render the seed prompt for one
@@ -18,18 +20,28 @@ import (
 // things that read like decisions but aren't. Splitting costs one extra
 // writer call; init runs once per repo, so that's an acceptable price (see
 // this change's commit message).
-func ProjectPrompt(f Facts) string {
+// r is phase 04's choke point (docs/phases/04-config-and-safety.md),
+// applied the same way internal/worker's buildDocPrompt applies it: the
+// fully assembled prompt is redacted in one pass right before it's
+// returned. It matters here as much as anywhere else in the pipeline —
+// Facts.Files can include a README or manifest that happens to have a
+// real credential pasted into it, and scan.go's Ignore-glob filtering
+// (which drops whole files before they're ever read) only catches files
+// whose *path* looks secret-ish, not a stray key sitting in an otherwise
+// ordinary file. r is required: redact.Redactor.Redact panics on a nil
+// receiver rather than silently letting repo content through.
+func ProjectPrompt(f Facts, r *redact.Redactor) string {
 	var b strings.Builder
 	b.WriteString(projectInstructions)
 	renderFacts(&b, f)
-	return b.String()
+	return r.Redact(b.String())
 }
 
-func DecisionsPrompt(f Facts) string {
+func DecisionsPrompt(f Facts, r *redact.Redactor) string {
 	var b strings.Builder
 	b.WriteString(decisionsInstructions)
 	renderFacts(&b, f)
-	return b.String()
+	return r.Redact(b.String())
 }
 
 // renderFacts writes the repo root, directory tree, and every scanned file
