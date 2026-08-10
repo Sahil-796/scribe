@@ -440,41 +440,17 @@ func TestInit_DocsInGit_DoesNotIgnoreDocs(t *testing.T) {
 	}
 }
 
-// TestInit_RecordsLayoutChoice pins that the layout answer is persisted.
-// Phase 06 consumes it; recording it now means the answer exists before the
-// code that reads it does.
-func TestInit_RecordsLayoutChoice(t *testing.T) {
-	for _, want := range []string{install.LayoutPerSession, install.LayoutShared} {
-		t.Run(want, func(t *testing.T) {
-			withFakeWriter(t, fakeSeedOutput)
-			dir := newTestRepo(t)
-
-			if _, _, err := runInitCmd(t, dir, "--yes", "--apply", "--layout", want); err != nil {
-				t.Fatalf("init --layout %s failed: %v", want, err)
-			}
-			cfg, err := install.ReadConfig(dir)
-			if err != nil {
-				t.Fatalf("reading config: %v", err)
-			}
-			if cfg.Layout != want {
-				t.Errorf("config.Layout = %q, want %q", cfg.Layout, want)
-			}
-		})
-	}
-}
-
-// TestInit_RejectsUnknownLayout: a typo in a script must fail loudly rather
-// than silently recording nonsense phase 06 would later have to interpret.
-func TestInit_RejectsUnknownLayout(t *testing.T) {
+// TestInit_NoLayoutFlag pins OPEN-ITEMS item 31: there is no --layout flag
+// (removed along with the wizard's Layout question, following item 17's
+// precedent), and Config.Layout is always the recorded default —
+// "per-session" — regardless. Phase 06, the only thing that would ever read
+// a different answer, doesn't exist yet.
+func TestInit_NoLayoutFlag(t *testing.T) {
 	withFakeWriter(t, fakeSeedOutput)
 	dir := newTestRepo(t)
 
-	_, _, err := runInitCmd(t, dir, "--yes", "--layout", "per-persson")
-	if err == nil {
-		t.Fatal("expected an error for an unknown --layout value")
-	}
-	if !strings.Contains(err.Error(), "per-persson") {
-		t.Errorf("error should name the bad value, got: %v", err)
+	if _, _, err := runInitCmd(t, dir, "--yes", "--layout", "shared"); err == nil {
+		t.Fatal("expected an error: --layout no longer exists as a flag")
 	}
 }
 

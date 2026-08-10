@@ -55,11 +55,9 @@ func TestAsk_PTY_HappyPath_ReturnsActualChoices(t *testing.T) {
 	s.Send(keyEnter) // commit, submit group 2 (Model is the last field)
 
 	// modelChoice != ModelOther, so the "Model name" group stays hidden and
-	// we land straight on Docs layout — accept the default (per-session).
-	s.WaitForFocused("Docs layout", ptyTimeout)
-	s.Send(keyEnter)
-
-	// "Commit the docs to git?" — accept the default (No / keep them out).
+	// we land straight on "Commit the docs to git?" — accept the default
+	// (No / keep them out). No Layout question in between: item 31 removed
+	// it (see wizard.go's Layout doc comment).
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)
 
@@ -112,13 +110,10 @@ func TestAsk_PTY_ModelSelect_GradedModel(t *testing.T) {
 	s.Send(keyDown) // -> deepseek (GradedModels[2], the third)
 	s.Send(keyEnter)
 
-	// The hidden group must actually stay hidden: assert we're on Docs
-	// layout, never having seen "Model name" in between.
-	s.WaitForFocused("Docs layout", ptyTimeout)
-	s.AssertNotContaining("Model name")
-
-	s.Send(keyEnter)
+	// The hidden group must actually stay hidden: assert we're on "Commit
+	// the docs to git?", never having seen "Model name" in between.
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
+	s.AssertNotContaining("Model name")
 	s.Send(keyEnter)
 	s.WaitForFocused("Run the seed and replay passes now?", ptyTimeout)
 	s.Send(keyEnter)
@@ -166,8 +161,6 @@ func TestAsk_PTY_ModelSelect_CustomModel(t *testing.T) {
 	s.Send("opencode/my-custom-model")
 	s.Send(keyEnter)
 
-	s.WaitForFocused("Docs layout", ptyTimeout)
-	s.Send(keyEnter)
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)
 	s.WaitForFocused("Run the seed and replay passes now?", ptyTimeout)
@@ -220,8 +213,6 @@ func TestAsk_PTY_NonGradedDefaultModel_PrePopulatesCustomField(t *testing.T) {
 	s.WaitFor(preset, ptyTimeout)
 	s.Send(keyEnter) // accept the pre-filled value as-is
 
-	s.WaitForFocused("Docs layout", ptyTimeout)
-	s.Send(keyEnter)
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)
 	s.WaitForFocused("Run the seed and replay passes now?", ptyTimeout)
@@ -280,8 +271,6 @@ func TestAsk_PTY_CustomModelValidation_RejectsEmpty(t *testing.T) {
 	// Now supply a value and confirm the form actually unblocks and
 	// completes — proves this was a real validation gate, not a hang.
 	s.Send("opencode/now-valid")
-	s.Send(keyEnter)
-	s.WaitForFocused("Docs layout", ptyTimeout)
 	s.Send(keyEnter)
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)

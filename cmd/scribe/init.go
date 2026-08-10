@@ -89,7 +89,6 @@ The docs path is fixed at docs/scribe (decision 9) and is not configurable.`,
 	cmd.Flags().String("agent", "", "writer agent connector (default: "+wizard.DefaultAgent+")")
 	cmd.Flags().String("model", "", "model passed to the writer agent (default: "+wizard.DefaultModel+")")
 	cmd.Flags().Bool("docs-in-git", false, "commit the docs instead of adding them to .gitignore")
-	cmd.Flags().String("layout", "", "docs layout: per-session or shared (default: per-session)")
 	cmd.Flags().Bool("yes", false, "skip the interactive wizard and review screen; use flags/defaults")
 	cmd.Flags().Bool("apply", false, "write for real: docs, Stop hook, config. Default is a dry run")
 
@@ -103,7 +102,6 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	agentFlag, _ := cmd.Flags().GetString("agent")
 	modelFlag, _ := cmd.Flags().GetString("model")
 	docsInGitFlag, _ := cmd.Flags().GetBool("docs-in-git")
-	layoutFlag, _ := cmd.Flags().GetString("layout")
 	yes, _ := cmd.Flags().GetBool("yes")
 	apply, _ := cmd.Flags().GetBool("apply")
 
@@ -153,20 +151,20 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		}
 	} else {
 		// No terminal: fall back to flags and the documented defaults. The
-		// onboarding questions the wizard asks (docs in git, layout) have
-		// no answer here, so they take the conservative default — docs
-		// stay out of git, layout per-session — and --docs-in-git /
-		// --layout let a script say otherwise explicitly.
+		// onboarding question the wizard asks (docs in git) has no answer
+		// here, so it takes the conservative default — docs stay out of
+		// git — and --docs-in-git lets a script say otherwise explicitly.
+		// Layout has no flag at all (OPEN-ITEMS item 31): phase 06, the only
+		// thing that would read it, doesn't exist, so it's always the
+		// recorded default rather than something a script can (wrongly)
+		// believe it's choosing.
 		answers = wizard.Answers{
 			Agent:     firstNonEmpty(agentFlag, wizard.DefaultAgent),
 			Model:     firstNonEmpty(modelFlag, wizard.DefaultModel),
 			DocsDir:   scribe.DocsDir,
 			DocsInGit: docsInGitFlag,
-			Layout:    wizard.Layout(firstNonEmpty(layoutFlag, string(wizard.LayoutPerSession))),
+			Layout:    wizard.LayoutPerSession,
 			Proceed:   true,
-		}
-		if answers.Layout != wizard.LayoutPerSession && answers.Layout != wizard.LayoutShared {
-			return fmt.Errorf("scribe init: --layout must be %q or %q, got %q", wizard.LayoutPerSession, wizard.LayoutShared, answers.Layout)
 		}
 	}
 

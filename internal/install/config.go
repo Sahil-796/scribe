@@ -42,8 +42,12 @@ type Config struct {
 
 	// Layout is "per-session" (each session writes its own file, no write
 	// conflicts) or "shared" (the four docs as single appended files).
-	// Consumed by phase 06; recorded from onboarding so the answer exists
-	// before the code that reads it does.
+	// Consumed by phase 06, which doesn't exist yet — so init no longer asks
+	// for this (OPEN-ITEMS item 31, following item 17's precedent) and
+	// always writes the default, "per-session". The field stays so phase 06
+	// has somewhere to put the real answer once its semantics exist; an
+	// answer recorded against semantics nobody has written down yet would be
+	// silently wrong rather than absent, which is worse than not asking.
 	Layout string `json:"layout"`
 }
 

@@ -76,9 +76,13 @@ var GradedModels = []struct{ ID, Note string }{
 const ModelOther = "other"
 
 // Layout is how a repo's docs are organised across the people working in it.
-// Asked at onboarding rather than decided globally: PLAN.md's phase 06 left
-// this open, and the answer is genuinely per-repo — a solo repo and a shared
-// one want different things.
+// The answer is genuinely per-repo — a solo repo and a shared one want
+// different things — but it is deliberately NOT asked at onboarding (see
+// Ask): PLAN.md's phase 06, the only code that would ever read this, doesn't
+// exist yet, and an answer given against semantics nobody has written down
+// is worse than no answer at all — it's silently wrong instead of visibly
+// absent (OPEN-ITEMS item 31). Kept as a type, with LayoutPerSession as the
+// recorded default, purely as the vocabulary phase 06 will need.
 type Layout string
 
 const (
@@ -98,8 +102,10 @@ type Answers struct {
 	// DocsInGit is whether the docs are committed to the repo or kept out of
 	// it via .gitignore. Asked rather than assumed (OPEN-ITEMS item 3).
 	DocsInGit bool
-	Layout    Layout
-	Proceed   bool
+	// Layout is never asked (see the Layout type doc) — always
+	// LayoutPerSession until phase 06 exists to give the question meaning.
+	Layout  Layout
+	Proceed bool
 }
 
 // Options seeds the form with defaults.
@@ -228,6 +234,10 @@ func Ask(o Options) (Answers, error) {
 	docsDir := o.DocsDir
 	proceed := true
 	docsInGit := false
+	// layout is never asked (see the comment on the "Commit the docs to
+	// git?" group below) — it's fixed at the default so the field exists
+	// in Answers/Config for phase 06 without recording an answer against
+	// semantics that don't exist yet.
 	layout := LayoutPerSession
 
 	// modelChoice is the select's value; customModel is the free-text field
@@ -283,14 +293,12 @@ func Ask(o Options) (Answers, error) {
 				Validate(huh.ValidateNotEmpty()),
 		).WithHideFunc(func() bool { return modelChoice != ModelOther }),
 		huh.NewGroup(
-			huh.NewSelect[Layout]().
-				Title("Docs layout").
-				Description("How these docs are organised when more than one person works here.").
-				Options(
-					huh.NewOption("One file per session — no write conflicts, digest aggregates them", LayoutPerSession),
-					huh.NewOption("Shared files — simplest, but concurrent writes can conflict", LayoutShared),
-				).
-				Value(&layout),
+			// No "docs layout" field: item 31 (OPEN-ITEMS) removed the
+			// question for the same reason decision 9 removed the docs-dir
+			// one (item 17) — phase 06, the only thing that would ever read
+			// Layout, doesn't exist yet, and a question whose answer does
+			// nothing is worse than no question. layout stays fixed at
+			// LayoutPerSession below rather than being asked here.
 			huh.NewConfirm().
 				Title("Commit the docs to git?").
 				Description("No keeps "+scribe.DocsDir+" out of the repo via .gitignore.").
