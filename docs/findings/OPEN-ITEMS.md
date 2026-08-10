@@ -11,32 +11,31 @@ they're merely worked on.
 29 and 30. Numbers are never reused: a gap means something was closed, and
 `docs/phases/*.md` plus `docs/findings/*.md` carry the write-ups.
 
----
+**Closed since the close-out pass:** 32 (Esc aborts the wizard — `9b0c1a8`, with the
+filter trade-off documented in `withAbortKeys`), 31 (the Layout question is no longer
+asked; `Config.Layout` stays for phase 06 — `6e32478`), 6 (see below), and 14 and 20,
+both decided **won't-fix** rather than done: 14's real-scale `init` proving is what
+item 28 covers in earnest, and 20's key reordering is cosmetic and would cost a JSON
+AST dependency to avoid.
 
-## Needs you — decisions nobody else can make
+**Item 6 (`codex` install) was closed by re-diagnosing it, and the original entry was
+wrong about which install was broken.** There were two: an orphaned homebrew copy at
+`/opt/homebrew/lib/node_modules/@openai/codex` (0.130.0, `vendor/…/codex/` empty and
+dated Aug 8 20:06 — the phase 00 kill), symlinked from `/opt/homebrew/bin/codex` and
+therefore **first on `PATH`**; and `/usr/local/…` (0.147.0), which was complete and
+working the whole time. So `sudo npm install -g @openai/codex` could never have fixed
+it — npm's prefix is `/usr/local`, the copy that was already fine. Nothing managed the
+homebrew tree (no `/opt/homebrew/bin/node`, no npm, no brew formula), so `npm
+uninstall` could not reach it either; it was removed by hand, no sudo needed. `codex`
+now resolves to `/usr/local/bin/codex`, `codex-cli 0.147.0`, which answers `--version`
+with no TTY and no hang.
 
-### 32. Should Esc back out of the init wizard?
-
-`wizard.go` claimed Ctrl+C **and** Esc aborted the form. Only Ctrl+C does: huh v1.0.0
-binds `Quit` to `ctrl+c` alone, verified against the vendored source and live through a
-pty. The comment is corrected and a test documents the real behaviour.
-
-What's undecided is whether that's a gap or the intent. Esc-to-cancel is a common
-terminal convention and its absence is the kind of thing an operator discovers by
-pressing Esc twice and then killing the terminal. Adding the binding is small; it's a
-product call, not a bug fix.
-
-### 6. `codex` install is damaged — needs sudo
-
-Probing it in phase 00 hung with no TTY; killing it left `ENOENT` on its vendor
-binary. Reinstall was blocked by `EACCES` on the global npm prefix.
-
-```bash
-sudo npm install -g @openai/codex
-```
-
-This was probe damage, not pre-existing. Until it's repaired, `codex` cannot be
-verified as a writer connector and its connector should not be written.
+Two things that survive item 6 rather than closing with it: codex still has **never
+been verified as a writer connector** — phase 00's sub-check (`docs/findings/00-writer.md`)
+reached "codex is a genuine unknown" against the broken copy, and now that a working
+binary exists that check is redoable but not redone. And 0.147.0 prints `WARNING:
+failed to clean up stale arg0 temp dirs: Permission denied`, from root-owned temp dirs
+left by the sudo install — cosmetic, but it will show up in any captured output.
 
 ---
 
@@ -86,34 +85,6 @@ exists for whoever writes the first one.
 Kept open because the environmental hazard is unchanged and applies to **live runs
 done by hand**, which is exactly what item 28 involves. Anyone doing those must use
 the override or their result says nothing about approval behaviour.
-
-### 14. `scribe init` — run for real only on scratch repos
-
-`scribe init --apply` has been run against throwaway git repos with a real `opencode`
-writer. It installs the Stop hook, writes the config, and produces docs judged
-genuinely good rather than filler.
-
-Still unproven: `init` against a repo with substantial existing history (the replay
-pass at real scale), and against a repo whose README and manifests are messier than a
-scratch fixture's. The seed pass has only ever seen a small, tidy repo. Phase 03
-doubled replay's calls per chunk, so a large history now costs twice what it did.
-
-### 31. `Layout` is asked at onboarding but nothing reads it
-
-Item 5's resolution records `layout: per-session | shared` in `.scribe/config.json` for
-phase 06 to build to. Phase 06 doesn't exist, so today the question is decorative —
-the same shape as the old docs-dir question that item 17 correctly deleted.
-
-The cost isn't the question, it's the ordering: every repo onboarded before phase 06
-bakes in an answer given against semantics that don't exist yet. If phase 06 lands on a
-different meaning for `per-session`, those recorded answers are silently wrong rather
-than absent. Worth deciding whether to defer the question until the code that consumes
-it exists.
-
-### 20. `install` re-encodes `settings.json` through `encoding/json`, which alphabetises top-level keys
-
-All keys and values survive; original key order does not. Byte-exact preservation
-would need a JSON AST library, which isn't a dependency.
 
 ---
 
