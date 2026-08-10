@@ -1,4 +1,18 @@
-# Open items — as of the phase 03 close-out pass
+# Open items — as of phase 04
+
+**Phase 04 shipped** (`docs/phases/04-config-and-safety.md`): redaction,
+`scribe on`/`off`, `status`, `diff`, `doctor`, global config layering and the
+nudge. Every command in `PLAN.md`'s table is real; `cmd/scribe/stub.go` is
+gone. Redaction was proven end to end against the real binary — a planted
+`sk-ant-…` key and `ghp_…` token reach no writer prompt — which retires the
+"it ships your session contents somewhere" risk from `PLAN.md` as *mitigated*,
+not as solved: see item 33.
+
+New items from phase 04: **33** (pattern-based redaction has limits), **34**
+(no live writer agent has been exercised since phase 00), **35** (the fanout
+worktree defect).
+
+
 
 Everything that is broken, unproven, or waiting on a decision. Nothing here is
 covered by a passing test, which is precisely why it's written down.
@@ -87,6 +101,43 @@ done by hand**, which is exactly what item 28 involves. Anyone doing those must 
 the override or their result says nothing about approval behaviour.
 
 ---
+
+### 33. Redaction is pattern-based, and patterns miss
+
+`internal/redact` strips values bound to a configured key name, plus a handful
+of shapes that are secrets by construction (`sk-`, `ghp_`, `AKIA`, bearer
+tokens, PEM blocks, secret-looking `.env` lines). That is a large improvement
+on nothing and it is not a guarantee. A secret in a shape nobody anticipated —
+a customer record, an internal hostname, a password typed as prose — goes
+through.
+
+It also over-matches in the other direction on purpose: the `.env`-line
+heuristic tests for substrings like `pat` and `key`, so `PATH=/usr/bin` is
+redacted. Fail-safe is the right default, but it will put placeholders in
+journals occasionally, and a redactor that eats too much prose is one people
+switch off — which would be the worst outcome available.
+
+Both directions are pinned by tests. Neither is settled.
+
+### 34. No live writer agent has been exercised since phase 00
+
+Everything in phases 03 and 04 was verified with fakes or with the `custom`
+connector recording its prompts. `doctor`'s "writer answers a trivial prompt"
+check has never been pointed at a real `opencode`, and `codex` is still the
+unknown item 6 left behind. This is cheap to close and nobody has done it.
+
+### 35. Fanout in a shared worktree corrupts commit attribution
+
+Phase 04's four agents committed into one worktree. `git commit` with no
+pathspec commits the whole index, so an agent's staged files were repeatedly
+swept into whichever other agent committed next: `08e09eb`, `694eb86` and
+`590e779` all carry a message that does not match their contents. No work was
+lost and the diffs were verified; history was deliberately not rewritten while
+agents were still committing.
+
+The fix is one line in the dispatch prompt — commit with an explicit pathspec
+(`git commit -- <paths>`), which ignores the index — or give each unit its own
+worktree. Recorded here because it will recur on every future fanout otherwise.
 
 ## Process notes
 

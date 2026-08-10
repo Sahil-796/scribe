@@ -1,161 +1,193 @@
 # Phase 04 — config and safety
 
-**Status: planned, not shipped. This document is the spec the fleet builds
-against; it gets rewritten as a retrospective when the phase lands, the way
-`03-writing.md` was.**
+**Status: shipped on `phase-04-config-safety`, reviewed, and proven end to
+end against the real binary. No command in `PLAN.md`'s table returns
+`notImplemented` any more — `cmd/scribe/stub.go` is deleted, because nothing
+imports it.**
 
-`PLAN.md` scopes phase 04 as one day of work:
-
-- off by default, opt in per repo; `scribe off` / `on` to pause without uninstalling
-- config as specified; the opencode connector, plus the shape other connectors slot into
-- the uninitialised-repo nudge — one line, once, after several sessions
-- redaction before anything leaves the machine
-- `scribe status`, `scribe diff`, `scribe doctor`
-
-Four of the seven commands in `PLAN.md`'s table still return
-`notImplemented(..., "04")`. This phase is the one that makes the CLI real, and
-it is also the one that has to land before scribe points at anything that
-matters — **redaction is the gate on this repo going public and on any hosted
-model seeing a transcript.**
+Four parallel units plus hand integration. The spec this was built to is
+preserved below in *What was specified*; everything above it is what actually
+happened.
 
 ---
 
-## The one thing that is not optional
+## The claim this phase is allowed to make
 
-Everything else here is ergonomics. Redaction is the only part of phase 04 that
-prevents an unrecoverable outcome: a transcript holds whatever was on screen,
-and the writer ships it to whoever runs the model. `PLAN.md`'s risk section
-already says so, and `OPEN-ITEMS.md` records that phase 03 committed rendered
-prompts containing real transcript turns and had to rewrite branch history
-before merge.
+A transcript containing a planted `sk-ant-…` key and a `ghp_…` token, fed
+through the real `scribe` binary — Stop hook, queue, worker, writer — produces
+writer prompts containing neither. The sentence that carries the actual
+engineering content, *"the api_key was wrong so I regenerated it"*, survives
+intact.
 
-So redaction is scoped as a **choke point, not a sprinkling**: no transcript
-byte and no repo byte reaches a writer prompt except through one function, and
-that is enforced by a test that fails if a prompt builder learns a second way to
-get at content.
+That was verified by driving the binary, not by reasoning about the prompt
+text. It is the one claim phase 03 could not make about its own premise, and
+`OPEN-ITEMS.md` item 28 still records that.
 
-## Decisions taken before dispatch
+## What shipped
 
-**Config stays JSON, and stays where it already is.** `PLAN.md` sketches
-`~/.config/scribe/config.toml` plus `.scribe/config.toml`. What shipped in phase
-02 is `.scribe/config.json`, with tests and a live install path. Adding a TOML
-parser to a repo whose entire dependency list is cobra + huh, in order to
-introduce a second serialisation format alongside the one already on disk, buys
-nothing a user can see and costs a migration. **Global defaults land at
-`~/.config/scribe/config.json`, same shape, repo config wins field by field.**
-This is a deliberate deviation from `PLAN.md`'s Config section; the field names
-and the layering it describes are honoured, the file extension is not.
+| Unit | Package | Does |
+|---|---|---|
+| A | `internal/redact` | The choke point. Key-bound value stripping, high-signal shapes regardless of key, `**`-aware ignore globs |
+| A | `internal/worker`, `replay`, `seed` | Every prompt builder routed through it; `CodeWeight` wired end to end |
+| B | `cmd/scribe/on_off.go`, `internal/hook` | `scribe off [--stay]` / `scribe on`, enforced in the hook |
+| C | `internal/docs/lastrun.go`, `cmd/scribe/{status,diff}.go` | Bounded run snapshot; the two commands you reach for when you don't trust it |
+| D | `internal/install/global.go`, `internal/nudge`, `cmd/scribe/{doctor,nudge}.go` | Global config layering, the nudge, doctor's eight named checks |
 
-**`Enabled` and paused are different things.** `Enabled` is the master switch
-`init` sets — it means "this repo was onboarded." Pausing is separate state with
-its own expiry, so `scribe off` never has to un-onboard a repo and `scribe on`
-never has to re-run install. `Config.Pause` carries it.
+**Redaction is a choke point, not a sprinkling.** A nil redactor is an error at
+every entry point — `worker.Run`, `replay.Run`, `seed.Run` all refuse to start
+without one — rather than a pass-through. The failure mode of the optional
+version is invisible and permanent. A test enumerates the prompt builders and
+fails if any of them learns a second route to transcript content.
 
-**`off` expires at the end of the local day.** Per `PLAN.md`: a permanent pause
-you forget about fails exactly the way forgetting to turn scribe on does.
-`--stay` opts into indefinite. `scribe status` always names the state, so "why
-hasn't it written anything" is one command away.
+**The redactor has to be judged in both directions.** Stripping secrets is
+half the job; the other half is that `JOURNAL.md`'s entire value is sentences
+like "the api_key was wrong so I regenerated it." A redactor that eats those is
+one nobody leaves switched on. Matching is therefore structural — a value
+*bound* to a key, never the key's every appearance.
 
-**The nudge is opt-in and lives in the user's global Claude settings, not the
-repo's.** It has to fire in repos scribe was never initialised in, which is
-precisely where scribe has installed nothing — so a project-level hook cannot
-reach it. That means writing to `~/.claude/settings.json`, which is the user's
-file and not scribe's to touch silently. It gets its own explicit command rather
-than being smuggled into `init`, and `init` does no more than mention it in one
-line of output. No new wizard question: phase 03 closed item 31 by *removing* a
-question, and adding one back for a nudge would be going the wrong way.
+**Pausing is separate state from `Enabled`.** Onboarding and pausing are
+different questions; folding them together would make `scribe off` un-onboard a
+repo. Expiry is evaluated on read, so nothing has to wake up, and a pause that
+lapsed while the machine was asleep is simply over. The hook declines to
+enqueue while paused — a pause that still queued would be a delay that dumped
+everything into the writer the moment it lapsed.
 
 **`scribe diff` reads a recorded snapshot, not git.** Git is the undo (decision
-10) but nothing commits the docs, so a git diff shows everything since the last
-human commit rather than what the last run changed. The worker records
-before/after itself.
+10) but nothing commits the docs, so `git diff` shows everything since the last
+human commit. The snapshot is bounded to one run, written atomically, and
+annotates a rotation from its own recorded pointer count so entries moving into
+`docs/scribe/archive/` don't render as the writer having deleted the journal.
+
+## Deviations from `PLAN.md`, taken deliberately
+
+**Config is JSON, not TOML.** `PLAN.md` sketches `~/.config/scribe/config.toml`
+plus `.scribe/config.toml`. Phase 02 shipped `.scribe/config.json` with tests
+and a live install path. Adding a TOML parser to a repo whose whole dependency
+list is cobra + huh, to run a second serialisation format alongside the one
+already on disk, buys nothing a user can see and costs a migration. Global
+defaults land at `~/.config/scribe/config.json`, same shape, repo config wins
+field by field. The field names and the layering `PLAN.md` describes are
+honoured; the extension is not.
+
+**`[code]`'s two keys collapsed to one.** `PLAN.md` lists `read` and `weight`.
+They are not independent: `read = false` and `weight = "off"` say the same
+thing, and every other combination is a state with no meaning. One field cannot
+express the contradiction.
+
+**The nudge is opt-in and has its own command.** It must fire in repos scribe
+has installed nothing in, so it needs a hook in the user's *global*
+`~/.claude/settings.json` — their file, not scribe's to touch silently. No new
+wizard question: phase 03 closed item 31 by *removing* one, and adding one back
+for a nudge goes the wrong way. `scribe init` mentions the command in one line
+and does nothing else.
+
+## What review caught that the units did not
+
+Consistent with phase 03's finding that subagent self-reports are not review.
+All four units reported success. Four defects survived that:
+
+1. **`ResetRun` had no caller.** `internal/docs` records a run's before/after
+   only once `ResetRun` has created the file, and the call site belongs in
+   `internal/worker` — a package unit C did not own and did not flag. Left
+   alone, `scribe diff` would compile, pass every test it owns, and answer "no
+   run has been recorded yet" forever against a live repo. It is now on the
+   `DocStore` interface rather than an optional type assertion, so a store
+   lacking it is a compile error rather than a silent no-op.
+2. **`status` and `diff` asked the wrong question about repo roots.** Both
+   called `hook.FindRepoRoot`, which walks up looking for `.scribe` — a
+   directory that only exists once `init` has run. Both therefore answered "Not
+   a git repository" in a never-initialised repo, the exact case they exist to
+   explain. Unit C's own test caught this and could not run, because
+   `cmd/scribe` did not compile until integration.
+3. **`applySpans` could leak a straddling span's tail.** A span starting inside
+   an already-applied span but ending past it was dropped, and its tail emitted
+   verbatim. Whether the current patterns can produce such a pair is not
+   obvious either way — which is the reason to handle it rather than reason
+   about it. Now tested against `applySpans` directly with hand-built spans, so
+   the answer stops depending on what the regexes happen to emit.
+4. **`seed.Run` and `replay.Run` never took the redactor** unit A threaded
+   through their prompt builders, leaving both entry points able to construct a
+   fully unredacted pass. That one is the orchestrator's fault, not A's: A was
+   scoped to `prompt.go` and `scan.go` without being given the callers in the
+   same packages.
+
+And one found by using the thing rather than reading it:
+
+5. **The `custom` writer connector was unreachable.** `PLAN.md` decision 6
+   promises a raw-command escape hatch, and `writer.New` has implemented it
+   since phase 01 — but `install.Config` had nowhere to record the command, and
+   every caller built `writer.Config` from `Agent` and `Model` alone. It failed
+   every time with "custom agent requires Config.Args or Config.Command" and no
+   way to supply either. Surfaced by needing a prompt-recording writer for the
+   acceptance run, which is precisely what `custom` is for.
+
+## The process defect worth recording
+
+**Four agents committing into one shared worktree corrupted commit
+attribution.** `git commit` with no pathspec commits the whole index, so an
+agent's `git add` was repeatedly swept into whichever other agent committed
+next. Three commits carry the wrong message for their contents — `08e09eb`
+(unit B's message, unit C's `internal/docs` files), `694eb86` (unit D's
+message, unit C's `status.go`), and `590e779` (the orchestrator's message, plus
+unit D's `internal/nudge`). No work was lost; every file landed exactly once
+and the diffs were verified. History was deliberately not rewritten: agents
+were still committing, and rewriting shared history under them is worse than a
+wrong message.
+
+Two of the three agents diagnosed this correctly and unprompted. The fix for
+next time is one line in the dispatch prompt: **commit with an explicit
+pathspec** (`git commit -- <paths>`), which ignores the index, or give each
+unit its own worktree.
+
+## Verification
+
+`go build ./...`, `go vet ./...`, `go test ./...` pass.
+
+Beyond the suite, the real binary was driven through: an uninitialised repo
+(`status`, `diff`, `on` and `doctor` all answer usefully, `doctor` exits 1 with
+eight named checks), a live repo (a run that changes docs, `diff` rendering the
+unified diff, `status` reporting what changed), and a paused repo (`off` naming
+its expiry, the hook enqueueing nothing, `run` refusing, `on` resuming). The
+redaction check above used a `custom` writer that records its prompts, so what
+was asserted is what an agent would actually have received.
+
+## What is NOT proven
+
+**No real writer agent was ever invoked.** Every check above used fakes or the
+recording `custom` connector. `doctor`'s "writer answers a trivial prompt" check
+has never been run against a live `opencode`.
+
+**The nudge's hook has never fired for real.** `scribe nudge --install` writes a
+SessionStart hook to the user's global Claude settings; that path is tested
+against a redirected `HOME`, never against the real file, by design.
+
+**Redaction is pattern-based, and patterns miss.** It catches what it was told
+about plus a handful of shapes that are secrets by construction. It is a large
+improvement on nothing and is not a guarantee. The `.env`-line heuristic also
+over-matches — `PATH=` trips the "pat" substring — which is the fail-safe
+direction on purpose, but it will put placeholders in journals occasionally.
+
+**The format migration from phase 03 is still open.** Any repo onboarded before
+phase 03 has the old plain-concatenated history format and nothing migrates it.
 
 ---
 
-## Work units
+## What was specified
 
-Four units, hard file ownership, no shared files. `cmd/scribe/run.go` and
-`cmd/scribe/root.go` are the integration points and are owned by nobody — they
-are wired by hand after the units land, which is what stopped phase 02 and 03
-from ever producing a contested file.
+The original spec, kept for the record: off by default with per-repo opt-in and
+`scribe off` / `on`; the config from `PLAN.md` plus the connector shape;
+the uninitialised-repo nudge; redaction before anything leaves the machine; and
+`scribe status`, `scribe diff`, `scribe doctor`. Four units with hard file
+ownership, `cmd/scribe/run.go` and `root.go` left unowned as the integration
+points — which is what kept this phase, like 02 and 03, at zero contested
+files.
 
-### A — redaction and the code-access knob
+## Next
 
-Owns: `internal/redact/**` (new), `internal/worker/prompt.go`,
-`internal/worker/worker.go`, `internal/replay/prompt.go`,
-`internal/seed/prompt.go`, `internal/seed/scan.go`, and tests for those.
-
-- `redact.Redactor`, built from the config's `redact` key patterns and `ignore`
-  globs, applied at the single point where content enters a prompt
-- Key-pattern matching that actually works on transcript prose — `api_key`
-  should catch `api_key=sk-…`, `"apiKey": "…"`, `API_KEY: …` and an `export`
-  line, and must not redact the words in a sentence about API keys
-- High-signal shapes regardless of key: `sk-…`, `ghp_…`, AWS ids, PEM blocks,
-  bearer tokens, `.env`-style assignment lines
-- `ignore` globs drop whole files in `internal/seed/scan.go` before they are read
-- `Deps.CodeWeight` honoured end to end, and a `Deps.Redactor` that is
-  **required, not optional** — a nil redactor is an error, not a pass-through,
-  because the failure mode of the optional version is silent and permanent
-- A test that enumerates the prompt builders and fails if any of them can reach
-  transcript content without going through the choke point
-
-### B — `scribe on` / `scribe off`, and enforcement
-
-Owns: `cmd/scribe/on_off.go` (+ tests), `internal/hook/hook.go`,
-`internal/hook/hook_test.go`, `cmd/scribe/hook.go`.
-
-- `scribe off [--stay]`, `scribe on`, writing `Config.Pause`
-- End-of-local-day expiry, evaluated on read so no timer or daemon exists
-- The hook exits **0, silently, without enqueueing** while paused — a pause that
-  still queues work is a delay, not a pause, and the queue would drain the moment
-  it expired
-- `scribe on` in a repo that was never initialised says to run `init`; it does
-  not half-onboard
-
-### C — `scribe status` and `scribe diff`
-
-Owns: `cmd/scribe/status.go`, `cmd/scribe/diff.go` (+ tests),
-`internal/docs/lastrun.go` (new), `internal/docs/docs.go`.
-
-- The docs store records a before/after snapshot of every applied run under
-  `.scribe/`, bounded to the last run only
-- `status`: on / off / paused-until / never-initialised, when the writer last
-  ran, what is queued and pending, whether a lock is held, and the last recorded
-  hook failure
-- `diff`: unified diff per doc from the recorded snapshot, and a plain "the last
-  run changed nothing" rather than empty output
-- Both are output, not interaction — plain stdout, per `PLAN.md`'s Stack section
-
-### D — `scribe doctor`, global config defaults, the nudge
-
-Owns: `cmd/scribe/doctor.go` (+ test), `internal/install/install.go`,
-`internal/install/global.go` (new), `internal/nudge/**` (new),
-`cmd/scribe/nudge.go` (new), `cmd/scribe/init.go`, `cmd/scribe/init_test.go`.
-
-- doctor's real checks, each a named line with a pass/fail and a fix: git repo,
-  config readable and valid, Stop hook installed and pointing at a binary that
-  exists, docs dir present, writer binary resolves, writer answers a trivial
-  prompt within a short timeout, queue/lock not wedged. Existing hook-failure
-  output stays.
-- Global `~/.config/scribe/config.json`, repo config wins per field
-- `scribe nudge --install` / `--remove` writing a SessionStart hook to the user's
-  global Claude settings, with a backup, and the hidden entrypoint it calls
-- The counter: per-repo session count in the user config dir, one line printed
-  once at a threshold, never a second time for the same repo, silent everywhere
-  scribe is already on
-
----
-
-## Done when
-
-`go build ./...`, `go vet ./...`, `go test ./...` pass; no command in
-`PLAN.md`'s table still returns `notImplemented`; a transcript containing a
-planted secret produces a writer prompt that does not contain it; and `status`,
-`diff` and `doctor` each answer usefully in a repo that was never initialised,
-one that is paused, and one that is live.
-
-## Explicitly not in this phase
-
-Phase 05's digest and index. Phase 06's layouts. Item 28 — running the phase 03
-eval corpus properly — which is real and still the cheapest open question, but
-is live `opencode` work rather than code and does not belong inside a fanout.
+1. Item 28 is still the cheapest open question in the project: run the phase 03
+   eval corpus, old prompt against new, and let the rubric say whether phase 03
+   worked. Phase 04 does not touch it.
+2. Decide the phase 03 format migration before anything real is onboarded.
+3. Point `doctor`'s writer check at a live `opencode` once, by hand, and see
+   whether it says anything useful.
+4. Phase 05: the weekly digest and the session index.
