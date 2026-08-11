@@ -31,13 +31,24 @@ import (
 var newDoctorWriter = writer.New
 
 // doctorWriterTimeout bounds the "writer answers a trivial prompt" check.
-// Deliberately a few seconds, not writer.Config's normal multi-minute
-// ceiling (internal/writer's defaultTimeout) — this check exists precisely
-// to catch a wrong model name or an agent hanging for want of an
-// auto-approve flag, and a check that waits as long as a real run defeats
-// its own purpose: "doctor" should be fast enough to run without thinking
-// about it.
-var doctorWriterTimeout = 8 * time.Second
+// Shorter than writer.Config's normal multi-minute ceiling (internal/writer's
+// defaultTimeout), because this check exists to catch a wrong model name or
+// an agent hanging for want of an auto-approve flag, not to sit through a
+// real run.
+//
+// It was 8s, reasoned from "doctor should be fast enough to run without
+// thinking about it," and that number was simply wrong. Measured against a
+// healthy opencode 1.18.15 on the default model, a trivial round trip —
+// "reply with the single word OK" — takes 11.3s, most of it process
+// startup and model latency that no configuration problem would change. So
+// doctor failed working installs and told them to go check their config.
+// A diagnostic that cries wolf is worse than no diagnostic: the first thing
+// it teaches you is to ignore it.
+//
+// 45s is set from that measurement with room for a slower machine or model,
+// and still catches the case it was built for — an agent waiting forever on
+// an approval prompt never answers at all.
+var doctorWriterTimeout = 45 * time.Second
 
 // doctorTrivialPrompt is deliberately inert: it asks for a fixed word back
 // and nothing else, so the check only ever exercises "can this agent run
@@ -67,6 +78,13 @@ type doctorCheck struct {
 func (c doctorCheck) String() string {
 	switch c.status {
 	case doctorPass:
+		if c.detail != "" {
+			// A passing check may still have something worth seeing — the
+			// writer round trip reports how long it took, which is the
+			// early warning for a setup that's healthy but drifting
+			// towards the timeout.
+			return fmt.Sprintf("[ OK ] %s — %s", c.name, c.detail)
+		}
 		return fmt.Sprintf("[ OK ] %s", c.name)
 	case doctorSkip:
 		return fmt.Sprintf("[SKIP] %s — %s", c.name, c.detail)
@@ -349,10 +367,15 @@ func doctorTrivialPromptCheck(w scribe.Writer, writerErr error) doctorCheck {
 	if writerErr != nil {
 		return doctorCheck{name, doctorFail, fmt.Sprintf("could not construct the writer: %v", writerErr)}
 	}
+	// Timed, and the duration is reported on success. This is the one
+	// check that makes a network round trip, so it dominates doctor's
+	// runtime — and a healthy-but-slow writer is worth seeing before it
+	// starts timing out for real.
+	started := time.Now()
 	if _, err := w.Run(doctorTrivialPrompt); err != nil {
 		return doctorCheck{name, doctorFail, fmt.Sprintf("%v — check the agent/model in .scribe/config.json (or ~/.config/scribe/config.json) and that the agent doesn't need an auto-approve flag", err)}
 	}
-	return doctorCheck{name, doctorPass, ""}
+	return doctorCheck{name, doctorPass, fmt.Sprintf("answered in %s", time.Since(started).Round(100*time.Millisecond))}
 }
 
 // doctorLockInfo mirrors internal/queue's unexported lockInfo JSON shape
