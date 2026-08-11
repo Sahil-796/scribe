@@ -9,10 +9,23 @@ gone. Redaction was proven end to end against the real binary — a planted
 not as solved: see item 33.
 
 New items from phase 04: **33** (pattern-based redaction has limits), **34**
-(no live writer agent has been exercised since phase 00), **35** (the fanout
-worktree defect).
+(live-agent coverage is thin), **35** (the fanout worktree defect).
 
+**Every open item below now has a GitHub issue.** The issue is the thing you
+assign or delegate; this file is the reasoning behind it. Neither is a
+substitute for the other — an issue closed without the write-up landing here
+loses why it mattered.
 
+| Item | Issue |
+|---|---|
+| 28 — run the phase 03 eval corpus | [#9](https://github.com/Sahil-796/scribe/issues/9) |
+| The phase 03 format migration | [#10](https://github.com/Sahil-796/scribe/issues/10) |
+| 8 — fail-open guard never seen firing | [#11](https://github.com/Sahil-796/scribe/issues/11) |
+| 33 — redaction patterns, both directions | [#12](https://github.com/Sahil-796/scribe/issues/12) |
+| 34 — live-agent coverage | [#13](https://github.com/Sahil-796/scribe/issues/13) |
+| 13 — opencode permissions pre-opened | [#14](https://github.com/Sahil-796/scribe/issues/14) |
+| Pre-public scrub | [#15](https://github.com/Sahil-796/scribe/issues/15) |
+| 35 — fanout worktree attribution | [#16](https://github.com/Sahil-796/scribe/issues/16) |
 
 Everything that is broken, unproven, or waiting on a decision. Nothing here is
 covered by a passing test, which is precisely why it's written down.
@@ -57,6 +70,8 @@ left by the sudo install — cosmetic, but it will show up in any captured outpu
 
 ### 28. Phase 03 shipped without using the harness built to judge it — start here
 
+[#9](https://github.com/Sahil-796/scribe/issues/9)
+
 **The most important open item now.** Phase 03's whole premise is "the writing is
 better." That claim currently rests on reasoning about prompt text plus two live
 `opencode` runs.
@@ -73,6 +88,8 @@ harness works, and this is one afternoon of `opencode` calls.
 
 ### 8. Fail-open guard — semantics changed in phase 03, still never seen firing for real
 
+[#11](https://github.com/Sahil-796/scribe/issues/11)
+
 `internal/worker` re-reads the docs after applying edits and treats "writer exited 0,
 nothing changed" as a failure, without advancing the offset.
 
@@ -86,6 +103,8 @@ assumption from phase 00's notes. The narrower definition makes a false positive
 likely and a missed true positive slightly more so.
 
 ### 13. opencode permissions are pre-opened on this machine — mitigated, not gone
+
+[#14](https://github.com/Sahil-796/scribe/issues/14)
 
 This machine's opencode has permissions opened globally via an `oh-my-openagent`
 plugin config, so anything exercising the approval path can pass for the wrong reason.
@@ -104,6 +123,8 @@ the override or their result says nothing about approval behaviour.
 
 ### 33. Redaction is pattern-based, and patterns miss
 
+[#12](https://github.com/Sahil-796/scribe/issues/12)
+
 `internal/redact` strips values bound to a configured key name, plus a handful
 of shapes that are secrets by construction (`sk-`, `ghp_`, `AKIA`, bearer
 tokens, PEM blocks, secret-looking `.env` lines). That is a large improvement
@@ -121,6 +142,8 @@ Both directions are pinned by tests. Neither is settled.
 
 ### 34. Live-agent coverage is one run — better than zero, still thin
 
+[#13](https://github.com/Sahil-796/scribe/issues/13)
+
 Phase 04 closed with one real `opencode` 1.18.15 run on
 `opencode/longcat-2.0-free`: a five-turn transcript with planted secrets,
 through the real hook → queue → worker path. Neither secret reached the docs;
@@ -137,6 +160,8 @@ surfaced a prompt-quality question for item 28 — CHANGELOG declined a session
 that shipped a real fix, while JOURNAL wrote it up.
 
 ### 35. Fanout in a shared worktree corrupts commit attribution
+
+[#16](https://github.com/Sahil-796/scribe/issues/16)
 
 Phase 04's four agents committed into one worktree. `git commit` with no
 pathspec commits the whole index, so an agent's staged files were repeatedly
@@ -162,7 +187,7 @@ worktree. Recorded here because it will recur on every future fanout otherwise.
   two rendered eval prompts embedding real transcript turns were committed and had to
   be removed from the branch's history before merge. `.gitignore` blocks the pattern
   now. A deliberate pass over `docs/findings/` and `experiments/` before flipping the
-  switch is still worth doing.
+  switch is still worth doing — [#15](https://github.com/Sahil-796/scribe/issues/15).
 - **Phases 02 and 03 were built by Sonnet subagent fleets** with hard file-ownership
   allowlists and a scope-diff gate: zero out-of-scope files, zero contested files, both
   times. Phase 02 used twelve agents and was expensive — every cold agent pays 80–130k
