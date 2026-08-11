@@ -179,11 +179,31 @@ latency. So the check failed working installs and told them to go check their
 config. Raised to 45s from the measurement, and a passing check now reports its
 round-trip time.
 
-**One thing worth watching, not fixed here.** CHANGELOG answered `NO_CHANGE`
-while JOURNAL wrote the entry above — but the session did ship a real fix, and
-a changelog line was arguably owed. That is prompt quality, which is item 28's
-territory and phase 03's premise, not phase 04's surface. Recorded rather than
-patched.
+**A second run turned an apparent defect into evidence.** In the first run
+CHANGELOG answered `NO_CHANGE` while JOURNAL wrote the entry above, which
+looked like a miss — the session did ship a fix, so a changelog line seemed
+owed. It was not a miss. That fixture was a bare `git init` containing nothing
+but four empty docs, and under `CodeWeight: check` the writer is told: *if the
+conversation discusses building something but you can't confirm it actually
+happened, don't write it up as done.* It looked, found no code, and correctly
+declined.
+
+Re-running with one variable changed — the same transcript and config against a
+repo that actually contains the claimed fix — produced:
+
+> 2026-08-10: fixed: readiness probe now runs a real query (deploy/health.go)
+> so it doesn't report ready before the DB pool is warm — was causing 502s on
+> deploy from early traffic
+
+`deploy/health.go` appears nowhere in the transcript. The writer could only
+know that path by reading the repo, so it demonstrably checked rather than
+declining by accident.
+
+That is the first real evidence that locked decision 7 — "it can read the code,
+but the transcript leads" — works as designed, and the direct answer to item
+24's failure mode of something discussed but never built landing in the
+changelog anyway. Recorded as a phase 03 result, since that is whose design it
+is.
 
 ## What is NOT proven
 

@@ -154,10 +154,16 @@ It paid for itself immediately by finding a defect no fake could have —
 it failed working installs. That is the argument for doing this every phase
 rather than at the end of one.
 
-Still open: one model, one transcript. `codex` and `claude` as writer
-connectors have never been exercised at all (see item 6). And a live run
-surfaced a prompt-quality question for item 28 — CHANGELOG declined a session
-that shipped a real fix, while JOURNAL wrote it up.
+A second run settled a question the first one raised. CHANGELOG had answered
+`NO_CHANGE` on a session that shipped a fix, which looked like a miss; it was
+not. That fixture had no code in it, and `CodeWeight: check` tells the writer
+not to write up as done what it cannot confirm. Re-run against a repo
+containing the claimed fix, CHANGELOG wrote the entry and cited a file path
+that appears nowhere in the transcript — so it read the repo. Locked decision 7
+works, and that is the first evidence for it.
+
+Still open: one model, two transcripts. `codex` and `claude` as writer
+connectors have never been exercised at all (see item 6).
 
 ### 35. Fanout in a shared worktree corrupts commit attribution
 
