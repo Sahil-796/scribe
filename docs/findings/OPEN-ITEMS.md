@@ -119,12 +119,22 @@ switch off — which would be the worst outcome available.
 
 Both directions are pinned by tests. Neither is settled.
 
-### 34. No live writer agent has been exercised since phase 00
+### 34. Live-agent coverage is one run — better than zero, still thin
 
-Everything in phases 03 and 04 was verified with fakes or with the `custom`
-connector recording its prompts. `doctor`'s "writer answers a trivial prompt"
-check has never been pointed at a real `opencode`, and `codex` is still the
-unknown item 6 left behind. This is cheap to close and nobody has done it.
+Phase 04 closed with one real `opencode` 1.18.15 run on
+`opencode/longcat-2.0-free`: a five-turn transcript with planted secrets,
+through the real hook → queue → worker path. Neither secret reached the docs;
+the journal entry recorded the wrong diagnosis alongside the right one.
+
+It paid for itself immediately by finding a defect no fake could have —
+`doctor`'s writer-check timeout was 8s against an 11.3s healthy round trip, so
+it failed working installs. That is the argument for doing this every phase
+rather than at the end of one.
+
+Still open: one model, one transcript. `codex` and `claude` as writer
+connectors have never been exercised at all (see item 6). And a live run
+surfaced a prompt-quality question for item 28 — CHANGELOG declined a session
+that shipped a real fix, while JOURNAL wrote it up.
 
 ### 35. Fanout in a shared worktree corrupts commit attribution
 

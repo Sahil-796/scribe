@@ -151,11 +151,45 @@ its expiry, the hook enqueueing nothing, `run` refusing, `on` resuming). The
 redaction check above used a `custom` writer that records its prompts, so what
 was asserted is what an agent would actually have received.
 
+## The live run
+
+Phases 03 and 04 were both built and verified entirely against fakes, so the
+phase closed with one run against a real `opencode` 1.18.15 on
+`opencode/longcat-2.0-free`. A five-turn transcript — a 502 debugging session
+containing a planted `sk-ant-…` key and `ghp_…` token, an AI claim that turned
+out to be wrong, and the real fix — through the actual hook → queue → worker
+path. Two writer calls, 1m47s.
+
+**Neither secret reached the docs or the writer.** The journal entry it wrote:
+
+> Deploy 502s kept recurring. Previously blamed the load balancer (wrong,
+> wasted an hour). This time the real cause was the readiness probe returning
+> 200 before the DB pool was warm — traffic arrived on a cold pool and the
+> first requests timed out. Fixed by making the probe wait on a real query.
+> API_KEY was never the problem; it was a warmup race all along.
+
+That is the shape phase 03's journal guidance asks for: the wrong diagnosis
+recorded alongside the right one, no narration of tool calls.
+
+**It immediately found a defect no fake could have.** `doctor`'s "writer
+answers a trivial prompt" check budgeted 8s, reasoned from "doctor should be
+fast enough to run without thinking about it." A trivial round trip against a
+*healthy* opencode measures 11.3s, nearly all of it process startup and model
+latency. So the check failed working installs and told them to go check their
+config. Raised to 45s from the measurement, and a passing check now reports its
+round-trip time.
+
+**One thing worth watching, not fixed here.** CHANGELOG answered `NO_CHANGE`
+while JOURNAL wrote the entry above — but the session did ship a real fix, and
+a changelog line was arguably owed. That is prompt quality, which is item 28's
+territory and phase 03's premise, not phase 04's surface. Recorded rather than
+patched.
+
 ## What is NOT proven
 
-**No real writer agent was ever invoked.** Every check above used fakes or the
-recording `custom` connector. `doctor`'s "writer answers a trivial prompt" check
-has never been run against a live `opencode`.
+**One live run, one model, one transcript.** That is better than phase 04's
+original zero and no more conclusive than phase 03's two. `codex` and `claude`
+as writer connectors remain entirely unexercised (item 6, item 34).
 
 **The nudge's hook has never fired for real.** `scribe nudge --install` writes a
 SessionStart hook to the user's global Claude settings; that path is tested
