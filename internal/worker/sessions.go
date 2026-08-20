@@ -1,12 +1,11 @@
 package worker
 
-// Phase 05 ("digest and index") adds a fifth, small writer job on top of the
-// four per-doc calls: once per session per run, summarise what that session
-// did in one skimmable line and classify it as a feature, a bug, or general
-// work. The result is upserted into internal/sessions, from which
-// internal/index renders docs/scribe/INDEX.md and internal/digest renders the
-// weekly digests — both pure functions of the record list, so no writer call
-// happens at render time (see cmd/scribe/run.go).
+// The session index adds a fifth, small writer job on top of the four
+// per-doc calls: once per session per run, summarise what that session did in
+// one skimmable line and classify it as a feature, a bug, or general work.
+// The result is upserted into internal/sessions, from which internal/index
+// renders docs/scribe/INDEX.md — a pure function of the record list, so no
+// writer call happens at render time (see cmd/scribe/run.go).
 //
 // The summary is its own call rather than something scraped out of the
 // CHANGELOG/JOURNAL edits for the same reason phase 03 split the four docs
@@ -27,10 +26,10 @@ import (
 )
 
 // SessionRecorder is the subset of *sessions.Store the worker needs to keep
-// the phase 05 index and digests fed: one upsert per session per run. It is
-// optional on Deps (a nil Sessions skips recording entirely, which is what
-// this package's own unit tests do) precisely because the index and digest
-// are secondary artifacts — a skimmable view of history, not history itself.
+// the session index fed: one upsert per session per run. It is optional on
+// Deps (a nil Sessions skips recording entirely, which is what this package's
+// own unit tests do) precisely because the index is a secondary artifact — a
+// skimmable view of history, not history itself.
 // A failure to record one must degrade to "the index is stale", never fail
 // the doc-writing run it rides along with, the same way the `scribe diff`
 // snapshot does in Run.
@@ -130,8 +129,8 @@ func parseCategory(s string) sessions.Category {
 
 // flattenLine collapses any newline that slipped into a one-line field to a
 // space, so one session can never become two index lines. index.Render does
-// this too — belt and braces, since the record on disk is what the digest
-// also reads.
+// this too — belt and braces, since the record on disk is what the index
+// reads.
 func flattenLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }

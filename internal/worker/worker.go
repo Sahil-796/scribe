@@ -140,9 +140,9 @@ type Deps struct {
 	LoadOffset     OffsetLoader
 	SaveOffset     OffsetSaver
 
-	// Sessions, if non-nil, is where phase 05 records one summary line +
-	// category per session per run, feeding docs/scribe/INDEX.md and the
-	// weekly digests (see sessions.go and cmd/scribe/run.go). Optional: a
+	// Sessions, if non-nil, is where the worker records one summary line +
+	// category per session per run, feeding docs/scribe/INDEX.md (see
+	// sessions.go and cmd/scribe/run.go). Optional: a
 	// nil Sessions skips session recording entirely — the doc-writing loop
 	// is unaffected, and this package's own tests leave it nil. A recording
 	// failure is logged, never fatal (see finishRun).
@@ -401,8 +401,8 @@ func runOnce(deps Deps) error {
 // changed is a separate question from whether work occurred.
 //
 // Recording is best-effort by design: a failed summary call (or a nil
-// Sessions) logs and moves on, and offsets still advance. The index and
-// digest are a skimmable view of history, not the source of truth — failing
+// Sessions) logs and moves on, and offsets still advance. The index is a
+// skimmable view of history, not the source of truth — failing
 // the whole run because that view couldn't be refreshed would be the tail
 // wagging the dog, exactly as with the `scribe diff` snapshot in Run. The
 // offset advancing regardless means a transient writer hiccup costs one

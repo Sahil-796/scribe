@@ -1,9 +1,7 @@
 // Package sessions is the store of per-session records scribe keeps for one
-// repo. Phase 05 (docs/phases/05-digest-and-index.md) renders two new
-// artifacts — a weekly digest and a session index — and both are just
-// different views over the same list of "what happened in each session".
-// This package owns that list; internal/digest and internal/index read it
-// and never touch the JSON directly.
+// repo. The session index (internal/index) is a view over the same list of
+// "what happened in each session". This package owns that list; index reads
+// it and never touches the JSON directly.
 //
 // One record per Claude Code session id. A session spans many worker runs
 // (a session is a long conversation; the Stop hook fires after every reply),
@@ -34,8 +32,8 @@ import (
 )
 
 // Category is the coarse bucket a session's work falls into. It exists so the
-// digest and index can group and label sessions without re-deriving intent
-// from the summary text. The set is deliberately tiny and closed — three
+// index can label sessions without re-deriving intent from the summary text.
+// The set is deliberately tiny and closed — three
 // buckets a human skims, not a taxonomy — and anything that isn't clearly a
 // feature or a bug is CategoryGeneral.
 type Category string
@@ -47,12 +45,12 @@ const (
 )
 
 // Record is one session's line in the store. It is intentionally small: the
-// digest and index want a headline, a category and enough timestamps to
-// order and group by, not a transcript.
+// index wants a headline, a category and enough timestamps to order by, not
+// a transcript.
 //
 // Summary is contracted to be a single line with no embedded newlines — the
-// index renders one record per row and the digest lists them as bullets, so
-// a stray newline would break the layout. This package stores Summary
+// index renders one record per row, so a stray newline would break the
+// layout. This package stores Summary
 // exactly as given and does NOT police that contract (callers strip
 // newlines before calling Upsert); the field doc is the contract, the caller
 // is the enforcement. Storing as-is keeps this package from silently
@@ -189,7 +187,7 @@ func (s *Store) Upsert(r Record) error {
 
 // All returns every stored record sorted by Started ascending, ties broken
 // by SessionID ascending (see sortRecords) for a stable, deterministic
-// order the digest and index can render without re-sorting. A missing file
+// order the index can render without re-sorting. A missing file
 // yields an empty, non-nil slice and a nil error — "no sessions yet" is a
 // normal state, not a failure.
 func (s *Store) All() ([]Record, error) {

@@ -10,7 +10,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Sahil-796/scribe/internal/digest"
 	"github.com/Sahil-796/scribe/internal/docs"
 	"github.com/Sahil-796/scribe/internal/index"
 	"github.com/Sahil-796/scribe/internal/install"
@@ -99,7 +98,7 @@ func runRun(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Phase 05: the worker records one summary line per session here; after
-	// the run we render INDEX.md and the weekly digests from the full set.
+	// the run we render INDEX.md from the full set.
 	sessStore, err := sessions.Open(repoRoot)
 	if err != nil {
 		return fmt.Errorf("scribe run: %w", err)
@@ -137,34 +136,26 @@ func runRun(cmd *cobra.Command, _ []string) error {
 
 	// Render the phase 05 views from whatever the run recorded. These are
 	// pure functions of the session records (no writer call), and a failure
-	// here must not fail the run that already wrote its docs — the index and
-	// digests are a skimmable view of history, not history itself. Report
-	// what happened and move on.
-	renderViews(out, cmd.ErrOrStderr(), repoRoot, sessStore)
+	// here must not fail the run that already wrote its docs — the index is
+	// a skimmable view of history, not history itself. Report what happened
+	// and move on.
+	renderViews(cmd.ErrOrStderr(), repoRoot, sessStore)
 
 	fmt.Fprintf(out, "scribe run: done for %s\n", repoRoot)
 	return nil
 }
 
-// renderViews rebuilds docs/scribe/INDEX.md and writes any past-week digest
-// that is now complete and missing (digest.MaybeWrite), from the recorded
-// session set. Best-effort: every failure is reported to errOut and then
-// swallowed, because the doc-writing run these views summarise has already
-// succeeded by the time this is called.
-func renderViews(out, errOut io.Writer, repoRoot string, sessStore *sessions.Store) {
+// renderViews rebuilds docs/scribe/INDEX.md from the recorded session set.
+// Best-effort: every failure is reported to errOut and then swallowed,
+// because the doc-writing run this view summarises has already succeeded by
+// the time this is called.
+func renderViews(errOut io.Writer, repoRoot string, sessStore *sessions.Store) {
 	recs, err := sessStore.All()
 	if err != nil {
-		fmt.Fprintf(errOut, "scribe run: could not read session records for the index/digest: %v\n", err)
+		fmt.Fprintf(errOut, "scribe run: could not read session records for the index: %v\n", err)
 		return
 	}
 	if err := index.Write(repoRoot, recs); err != nil {
 		fmt.Fprintf(errOut, "scribe run: could not write the session index: %v\n", err)
-	}
-	written, err := digest.MaybeWrite(repoRoot, recs, time.Now())
-	if err != nil {
-		fmt.Fprintf(errOut, "scribe run: could not write weekly digests: %v\n", err)
-	}
-	for _, p := range written {
-		fmt.Fprintf(out, "scribe run: wrote digest %s\n", p)
 	}
 }

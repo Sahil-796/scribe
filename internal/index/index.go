@@ -1,10 +1,9 @@
 // Package index renders scribe's session index — the file
 // <repoRoot>/docs/scribe/INDEX.md — from the session records owned by
-// internal/sessions. Phase 05 (docs/phases/05-digest-and-index.md) adds two
-// views over the same record list; this package owns the index view, whose
-// whole job is to be skimmable: one short, dated line per session, newest
-// first, so a human scanning the file sees "what happened recently, at a
-// glance" without opening a transcript.
+// internal/sessions. This is a view over that record list, whose whole job
+// is to be skimmable: one short, dated line per session, newest first, so a
+// human scanning the file sees "what happened recently, at a glance" without
+// opening a transcript.
 //
 // There is no model and no intelligence here. Rendering is a pure,
 // deterministic function of the record slice — the same records always
@@ -13,10 +12,8 @@
 // index be committed to git and diffed meaningfully: a change in the file
 // means a change in the sessions, never rendering noise.
 //
-// The weekly grouping and prose belong to the digest (internal/digest); the
-// index deliberately stays a single flat reverse-chronological list. Keeping
-// the two views separate is the point — the index is the terse lookup, the
-// digest is the narrative.
+// The index deliberately stays a single flat reverse-chronological list — a
+// terse lookup over every session, nothing more.
 package index
 
 import (

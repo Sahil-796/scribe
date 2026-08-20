@@ -17,8 +17,8 @@ func TestParseSummaryOutput(t *testing.T) {
 	}{
 		{
 			name:        "well formed feature",
-			out:         "CATEGORY: feature\nSUMMARY: added the weekly digest renderer",
-			wantSummary: "added the weekly digest renderer",
+			out:         "CATEGORY: feature\nSUMMARY: added the session index renderer",
+			wantSummary: "added the session index renderer",
 			wantCat:     sessions.CategoryFeature,
 		},
 		{

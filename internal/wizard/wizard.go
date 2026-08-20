@@ -87,7 +87,7 @@ type Layout string
 
 const (
 	// LayoutPerSession gives each session its own file, aggregated by the
-	// digest. No write conflicts by construction.
+	// session index. No write conflicts by construction.
 	LayoutPerSession Layout = "per-session"
 	// LayoutShared keeps the four docs as single shared files that everyone
 	// appends to. Simplest, but concurrent writes can conflict.
