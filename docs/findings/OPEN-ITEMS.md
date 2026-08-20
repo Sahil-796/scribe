@@ -1,4 +1,18 @@
-# Open items — as of phase 04
+# Open items — as of phase 05
+
+**Phase 05 shipped** (`docs/phases/05-digest-index.md`) on
+`phase-05-digest-index`, branched off `phase-04-config-safety` (which is still
+open on PR #8, not merged): the weekly digest (`docs/scribe/digests/`) and the
+session index (`docs/scribe/INDEX.md`), both pure renders of a new
+per-session record store (`internal/sessions`). The only model work added is
+one cheap summary call per session per run. Three-unit fanout, zero
+out-of-scope and zero contested files — the fourth phase in a row at that.
+
+New item from phase 05: **36** (`init` replay doesn't backfill the index/
+digests — [#17](https://github.com/Sahil-796/scribe/issues/17)). Phase 05 also
+leaves two smaller threads noted in its phase doc: no live-agent run through
+the summary path yet (the item-34 lesson applied to phase 05), and `scribe
+status` doesn't surface the new views.
 
 **Phase 04 shipped** (`docs/phases/04-config-and-safety.md`): redaction,
 `scribe on`/`off`, `status`, `diff`, `doctor`, global config layering and the
@@ -8,7 +22,7 @@ gone. Redaction was proven end to end against the real binary — a planted
 "it ships your session contents somewhere" risk from `PLAN.md` as *mitigated*,
 not as solved: see item 33.
 
-New items from phase 04: **33** (pattern-based redaction has limits), **34**
+Items from phase 04: **33** (pattern-based redaction has limits), **34**
 (live-agent coverage is thin), **35** (the fanout worktree defect).
 
 **Every open item below now has a GitHub issue.** The issue is the thing you
@@ -26,6 +40,7 @@ loses why it mattered.
 | 13 — opencode permissions pre-opened | [#14](https://github.com/Sahil-796/scribe/issues/14) |
 | Pre-public scrub | [#15](https://github.com/Sahil-796/scribe/issues/15) |
 | 35 — fanout worktree attribution | [#16](https://github.com/Sahil-796/scribe/issues/16) |
+| 36 — init replay doesn't backfill index/digests | [#17](https://github.com/Sahil-796/scribe/issues/17) |
 
 Everything that is broken, unproven, or waiting on a decision. Nothing here is
 covered by a passing test, which is precisely why it's written down.
@@ -180,6 +195,25 @@ The fix is one line in the dispatch prompt — commit with an explicit pathspec
 (`git commit -- <paths>`), which ignores the index — or give each unit its own
 worktree. Recorded here because it will recur on every future fanout otherwise.
 
+### 36. `scribe init`'s replay doesn't backfill the phase 05 index/digests
+
+[#17](https://github.com/Sahil-796/scribe/issues/17)
+
+The session index and weekly digests are fed by one summary call per session
+in the live worker loop (`internal/worker`'s `finishRun`). `scribe init`'s
+replay pass (`internal/replay`) reconstructs a repo's past sessions and writes
+CHANGELOG/JOURNAL, but writes no session records — so on a freshly-onboarded
+repo `INDEX.md` and `digests/` start empty and only cover sessions from phase
+05 forward.
+
+This is the one place phase 05 falls short of "useful on day one", and it was
+deferred deliberately, not missed: replay has its own writer-call budget and
+chunking, and a per-session summary pass there is its own integration
+decision (every replayed session pays a call, or a cheaper shared pass?). The
+backfill machinery is already built — `digest.MaybeWrite` fills any missing
+past week — so the moment replay upserts records, the digests materialise on
+the next run. Not a defect in shipped code; a bounded follow-up.
+
 ## Process notes
 
 - **Phases 00–03 are merged to `main`.** [#1](https://github.com/Sahil-796/scribe/pull/1)
@@ -204,3 +238,11 @@ worktree. Recorded here because it will recur on every future fanout otherwise.
   block separator that collides with ordinary markdown — were all found by review
   after the fact, and all three were consequences of a shape change nobody traced
   through. Subagent self-reports are not review.
+- **Phase 05 applied the item-35 fix.** Its three units each owned a fresh package
+  (`internal/sessions`, `internal/index`, `internal/digest`) and committed with an
+  explicit pathspec (`git add -- <dir>`), so no agent's staged files were swept into
+  another's commit — every commit's message matches its contents, unlike phase 04's
+  three mis-attributed commits. The one wave-1/wave-2 dependency (index and digest
+  both import sessions) was handled by dispatching sessions first and the other two
+  in parallel after it landed. Fanout stayed at three units for a one-day phase, not
+  the dozen phase 02 over-spent on.
