@@ -57,6 +57,54 @@ func runRunCmd(t *testing.T, dir string) (stdout, stderr string, err error) {
 	return outBuf.String(), errBuf.String(), err
 }
 
+// TestRun_WritesSessionIndex proves the phase 05 path end to end at the
+// command seam: a run whose summary call returns a valid CATEGORY/SUMMARY
+// reply leaves docs/scribe/INDEX.md carrying that session's line. The fake
+// returns the same reply for every writer call, which is fine — the doc
+// calls treat it as content, and only the summary call is asserted here.
+func TestRun_WritesSessionIndex(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatalf("creating fake .git: %v", err)
+	}
+	if err := install.WriteConfig(dir, install.Config{
+		Agent:   "opencode",
+		Model:   "opencode/longcat-2.0-free",
+		DocsDir: scribe.DocsDir,
+		Enabled: true,
+	}); err != nil {
+		t.Fatalf("seeding config: %v", err)
+	}
+
+	transcriptPath := filepath.Join(dir, "transcript.jsonl")
+	transcriptLine := `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"did the thing"}]},"timestamp":"2024-01-01T00:00:00Z","isSidechain":false}` + "\n"
+	if err := os.WriteFile(transcriptPath, []byte(transcriptLine), 0o644); err != nil {
+		t.Fatalf("writing fake transcript: %v", err)
+	}
+	if err := queue.Enqueue(dir, scribe.Trigger{
+		SessionID:      "sess-index",
+		TranscriptPath: transcriptPath,
+		RepoRoot:       dir,
+	}); err != nil {
+		t.Fatalf("enqueueing trigger: %v", err)
+	}
+
+	withFakeRunWriter(t, "CATEGORY: feature\nSUMMARY: shipped the widget")
+
+	if _, stderr, err := runRunCmd(t, dir); err != nil {
+		t.Fatalf("scribe run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	indexPath := filepath.Join(dir, "docs", "scribe", "INDEX.md")
+	b, err := os.ReadFile(indexPath)
+	if err != nil {
+		t.Fatalf("expected INDEX.md to exist after run: %v", err)
+	}
+	if !bytes.Contains(b, []byte("shipped the widget")) {
+		t.Fatalf("INDEX.md missing the session summary, got:\n%s", b)
+	}
+}
+
 func TestRun_OutsideGitRepo_Errors(t *testing.T) {
 	dir := t.TempDir() // deliberately no .git
 
@@ -116,7 +164,11 @@ func TestRun_HappyPath_DrainsQueueAndAppliesWriterEdits(t *testing.T) {
 	// call per doc, so the fake's output is now an entry, not an envelope.
 	// This transcript is pure engineering with no product-level talk, so the
 	// PROJECT/DECISIONS gate declines before spending a call on either —
-	// leaving exactly the two history docs, one call each.
+	// leaving the two history docs (one call each) plus the phase 05
+	// per-session summary call, three in total. The fake returns the same
+	// string for every call; the summary call's copy has no "SUMMARY:" line,
+	// so parseSummaryOutput declines it and the worker logs and moves on —
+	// the doc-writing the test asserts on is unaffected.
 	fakeOut := "- Updated by the fake writer."
 	calls := withFakeRunWriter(t, fakeOut)
 
@@ -124,8 +176,8 @@ func TestRun_HappyPath_DrainsQueueAndAppliesWriterEdits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scribe run failed: %v\nstdout: %s", err, stdout)
 	}
-	if *calls != 2 {
-		t.Fatalf("writer was called %d time(s), want 2 (CHANGELOG + JOURNAL)", *calls)
+	if *calls != 3 {
+		t.Fatalf("writer was called %d time(s), want 3 (CHANGELOG + JOURNAL + session summary)", *calls)
 	}
 
 	for _, doc := range []scribe.Doc{scribe.DocChangelog, scribe.DocJournal} {

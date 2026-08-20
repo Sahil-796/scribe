@@ -140,6 +140,14 @@ type Deps struct {
 	LoadOffset     OffsetLoader
 	SaveOffset     OffsetSaver
 
+	// Sessions, if non-nil, is where phase 05 records one summary line +
+	// category per session per run, feeding docs/scribe/INDEX.md and the
+	// weekly digests (see sessions.go and cmd/scribe/run.go). Optional: a
+	// nil Sessions skips session recording entirely — the doc-writing loop
+	// is unaffected, and this package's own tests leave it nil. A recording
+	// failure is logged, never fatal (see finishRun).
+	Sessions SessionRecorder
+
 	// Redactor is the phase 04 choke point every prompt builder in this
 	// package sends its assembled text through before a writer ever sees
 	// it (prompt.go's buildDocPrompt, buildGatePrompt and
@@ -293,6 +301,10 @@ func runOnce(deps Deps) error {
 
 	var allEntries []scribe.Entry
 	var offsetsToSave []pendingOffset
+	// Kept per session (not just concatenated into allEntries) because the
+	// phase 05 session summary is per session, not per run — INDEX.md has
+	// one line per session id. finishRun reads this to record each session.
+	entriesBySession := make(map[string][]scribe.Entry, len(order))
 
 	for _, sessionID := range order {
 		trig := bySession[sessionID]
@@ -311,6 +323,7 @@ func runOnce(deps Deps) error {
 		}
 
 		allEntries = append(allEntries, entries...)
+		entriesBySession[sessionID] = entries
 		offsetsToSave = append(offsetsToSave, pendingOffset{
 			repoRoot:  trig.RepoRoot,
 			sessionID: sessionID,
@@ -347,7 +360,7 @@ func runOnce(deps Deps) error {
 	// own. Nothing to apply, nothing to verify; the offset still advances
 	// below so this slice of transcript isn't re-read next run.
 	if len(docEdits) == 0 {
-		return saveOffsets(deps, offsetsToSave)
+		return finishRun(deps, offsetsToSave, order, entriesBySession)
 	}
 
 	if err := applyEdits(deps.Docs, docEdits); err != nil {
@@ -378,7 +391,36 @@ func runOnce(deps Deps) error {
 	// Only now, after every doc write above has succeeded and actually
 	// changed something, do offsets move. See the ordering comment above
 	// the function.
-	return saveOffsets(deps, offsetsToSave)
+	return finishRun(deps, offsetsToSave, order, entriesBySession)
+}
+
+// finishRun records each session's index summary (phase 05), then saves the
+// run's offsets. It sits in front of saveOffsets on both success paths — the
+// "wrote docs" path and the "everything was NO_CHANGE" path — because a
+// session that happened deserves an index line either way; whether the docs
+// changed is a separate question from whether work occurred.
+//
+// Recording is best-effort by design: a failed summary call (or a nil
+// Sessions) logs and moves on, and offsets still advance. The index and
+// digest are a skimmable view of history, not the source of truth — failing
+// the whole run because that view couldn't be refreshed would be the tail
+// wagging the dog, exactly as with the `scribe diff` snapshot in Run. The
+// offset advancing regardless means a transient writer hiccup costs one
+// missing index line, not a permanently re-read transcript slice.
+func finishRun(deps Deps, offsets []pendingOffset, order []string, entriesBySession map[string][]scribe.Entry) error {
+	if deps.Sessions != nil {
+		now := deps.now()
+		for _, sessionID := range order {
+			entries := entriesBySession[sessionID]
+			if len(entries) == 0 {
+				continue // nothing new read for this session this run
+			}
+			if err := recordSession(deps, sessionID, entries, now); err != nil {
+				deps.logf("worker: session index not updated for %s: %v\n", sessionID, err)
+			}
+		}
+	}
+	return saveOffsets(deps, offsets)
 }
 
 // pendingOffset is one session's new read position, queued up during the

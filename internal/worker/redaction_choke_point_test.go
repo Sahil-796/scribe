@@ -39,6 +39,7 @@ func TestRedactionChokePointCoversEveryPromptBuilder(t *testing.T) {
 		"buildDocPrompt(DocChangelog)": buildDocPrompt(scribe.DocChangelog, "current changelog", entries, CodeWeightCheck, r),
 		"buildDocPrompt(DocJournal)":   buildDocPrompt(scribe.DocJournal, "current journal", entries, CodeWeightCheck, r),
 		"buildGatePrompt":              buildGatePrompt(entries, r),
+		"buildSummaryPrompt":           buildSummaryPrompt(entries, r),
 		"projectRewriteNotice": projectRewriteNotice(
 			"before: api_key="+secret,
 			"after: api_key="+secret,
@@ -81,6 +82,15 @@ func TestBuildGatePromptPanicsOnNilRedactor(t *testing.T) {
 		}
 	}()
 	buildGatePrompt(nil, nil)
+}
+
+func TestBuildSummaryPromptPanicsOnNilRedactor(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected buildSummaryPrompt with a nil Redactor to panic")
+		}
+	}()
+	buildSummaryPrompt(nil, nil)
 }
 
 // TestRunRejectsNilRedactor is Deps' own gate: a worker wired up without a
