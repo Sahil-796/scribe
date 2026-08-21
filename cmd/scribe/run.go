@@ -13,6 +13,7 @@ import (
 	"github.com/Sahil-796/scribe/internal/docs"
 	"github.com/Sahil-796/scribe/internal/index"
 	"github.com/Sahil-796/scribe/internal/install"
+	"github.com/Sahil-796/scribe/internal/layout"
 	"github.com/Sahil-796/scribe/internal/queue"
 	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
@@ -92,7 +93,18 @@ func runRun(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("scribe run: %w", err)
 	}
 
-	store, err := docs.Open(repoRoot)
+	// The repo's configured history layout (phase 06). ParseMode already maps
+	// an unset field to the conflict-free per-session default; a genuinely
+	// invalid string (a hand-edited typo in config.json) is logged and falls
+	// back to per-session rather than aborting the run — unlike code.weight
+	// above, an unreadable layout value shouldn't cost the user a run, and
+	// per-session is the safe default the plan settled on.
+	mode, err := layout.ParseMode(cfg.Layout)
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "scribe run: %v; falling back to %q\n", err, layout.PerSession)
+		mode = layout.PerSession
+	}
+	store, err := docs.OpenWithLayout(repoRoot, mode)
 	if err != nil {
 		return fmt.Errorf("scribe run: %w", err)
 	}
