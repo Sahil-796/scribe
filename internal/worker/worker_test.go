@@ -9,8 +9,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/attribution"
+	"github.com/Sahil-796/scribe/internal/layout"
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
+
+// testRedactor is the Redactor every test wires into Deps (now required —
+// see Deps.Redactor's doc comment). A fixed default key/ignore list is
+// enough for every existing test in this file: none of them are testing
+// redaction itself, so a Redactor that behaves like a real one wired from
+// install.Config's phase-04 defaults is what keeps this file's fakes
+// realistic without pulling internal/install into a worker test.
+func testRedactor() *redact.Redactor {
+	return redact.New(
+		[]string{"api_key", "token", "password", "secret"},
+		[]string{"**/.env*", "**/secrets/**"},
+	)
+}
 
 // ---- fakes ----
 
@@ -75,12 +91,25 @@ type fakeDocStore struct {
 	state    map[scribe.Doc]string
 	history  map[scribe.Doc][]string
 	writeErr error
+
+	// resetRuns counts ResetRun calls; see the method below.
+	resetRuns int
+	resetErr  error
+
+	// historyMeta / historyAuthor capture the layout metadata and author of
+	// the most recent WriteHistory call per doc, so a test can assert the
+	// worker wired the run's primary session and resolved author through (see
+	// TestRunWiresSessionMetadataAndAuthorIntoHistory).
+	historyMeta   map[scribe.Doc]layout.SessionMeta
+	historyAuthor map[scribe.Doc]attribution.Author
 }
 
 func newFakeDocStore() *fakeDocStore {
 	return &fakeDocStore{
-		state:   map[scribe.Doc]string{},
-		history: map[scribe.Doc][]string{},
+		state:         map[scribe.Doc]string{},
+		history:       map[scribe.Doc][]string{},
+		historyMeta:   map[scribe.Doc]layout.SessionMeta{},
+		historyAuthor: map[scribe.Doc]attribution.Author{},
 	}
 }
 
@@ -108,13 +137,32 @@ func (f *fakeDocStore) WriteState(doc scribe.Doc, content string) error {
 	return nil
 }
 
-func (f *fakeDocStore) AppendHistory(doc scribe.Doc, entry string) error {
+// ResetRun records that the worker started a run snapshot. Counted rather
+// than ignored so a test can pin "exactly once per run, not once per
+// pending-flag loop" — the property that keeps `scribe diff` showing the
+// whole run rather than only its last pass.
+func (f *fakeDocStore) ResetRun() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resetRuns++
+	return f.resetErr
+}
+
+// WriteHistory records the raw entry it was handed, ignoring the layout
+// metadata and author — the fake exists to check the worker's ordering and
+// which entries reach the store, not to reproduce internal/docs's on-disk
+// layout (the rotation integration test drives a real *docs.Store for that).
+// Recording the entry verbatim keeps existing assertions on store.history
+// (which compare against the writer's exact output) honest.
+func (f *fakeDocStore) WriteHistory(doc scribe.Doc, meta layout.SessionMeta, author attribution.Author, entry string) error {
 	if f.writeErr != nil {
 		return f.writeErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.history[doc] = append(f.history[doc], entry)
+	f.historyMeta[doc] = meta
+	f.historyAuthor[doc] = author
 	return nil
 }
 
@@ -218,6 +266,7 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -238,6 +287,53 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	}
 }
 
+// TestRunWiresSessionMetadataAndAuthorIntoHistory proves the phase-06 wiring:
+// a history write carries the run's primary session id, a readable slug
+// derived from the entry's own first line, and the author attribution resolves
+// for the repo. The author is compared against attribution.Resolve on the same
+// RepoRoot so the assertion is deterministic regardless of the host's git
+// identity — both sides call the same resolver.
+func TestRunWiresSessionMetadataAndAuthorIntoHistory(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{outputs: []string{"- reworked the auth flow", noChangeSentinel}}
+
+	fixedNow := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
+		Now:      func() time.Time { return fixedNow },
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	meta := store.historyMeta[scribe.DocChangelog]
+	if meta.SessionID != "s1" {
+		t.Errorf("history meta SessionID = %q, want the primary session %q", meta.SessionID, "s1")
+	}
+	if !meta.Date.Equal(fixedNow) {
+		t.Errorf("history meta Date = %v, want deps.now() %v", meta.Date, fixedNow)
+	}
+	// Summary is the entry's first line with the leading "- " bullet stripped,
+	// so the per-session filename slug is readable.
+	if meta.Summary != "reworked the auth flow" {
+		t.Errorf("history meta Summary = %q, want the entry's first line %q", meta.Summary, "reworked the auth flow")
+	}
+
+	wantAuthor := attribution.Resolve("/repo")
+	if store.historyAuthor[scribe.DocChangelog] != wantAuthor {
+		t.Errorf("history author = %+v, want attribution.Resolve(\"/repo\") = %+v", store.historyAuthor[scribe.DocChangelog], wantAuthor)
+	}
+}
+
 // The core ordering guarantee: if the writer or the doc write fails, the
 // offset must NOT advance, or a crash mid-run would silently lose that
 // reply forever (no other source for those transcript bytes).
@@ -254,6 +350,7 @@ func TestOffsetDoesNotAdvanceWhenWriterFails(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -282,6 +379,7 @@ func TestOffsetDoesNotAdvanceWhenDocWriteFails(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -325,6 +423,7 @@ func TestRunReRunsWhenPendingFlagIsSet(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: wrapped,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -339,6 +438,45 @@ func TestRunReRunsWhenPendingFlagIsSet(t *testing.T) {
 	}
 	if q.lockCalls != 1 || q.unlockCalls != 1 {
 		t.Fatalf("expected the lock held across both iterations (1 lock/unlock cycle), got lock=%d unlock=%d", q.lockCalls, q.unlockCalls)
+	}
+	// The run snapshot `scribe diff` reads covers the whole run, so it is
+	// reset once — not once per pending-flag iteration, which would leave
+	// diff showing only whatever the final pass happened to touch.
+	if store.resetRuns != 1 {
+		t.Errorf("ResetRun called %d times across a two-iteration run, want exactly 1", store.resetRuns)
+	}
+}
+
+// The snapshot is a debugging aid, so failing to start it must not fail the
+// run that was actually asked for — the docs still get written, and
+// `scribe diff` degrades to having nothing to show.
+func TestRunSucceedsWhenTheRunSnapshotCannotBeStarted(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "did a thing"}}
+
+	store := newFakeDocStore()
+	store.resetErr = errors.New("disk full")
+	w := &fakeWriter{outputs: []string{"an entry", noChangeSentinel}}
+
+	var log bytes.Buffer
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
+		Log:      &log,
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run should survive a snapshot failure, got: %v", err)
+	}
+	if len(store.history[scribe.DocChangelog]) != 1 {
+		t.Errorf("the real doc write should still have happened, got %v", store.history[scribe.DocChangelog])
+	}
+	if !strings.Contains(log.String(), "snapshot") {
+		t.Errorf("the failure should be visible on Deps.Log, got %q", log.String())
 	}
 }
 
@@ -375,6 +513,7 @@ func TestRunSkipsAndMarksPendingWhenLockAlreadyHeld(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -397,6 +536,7 @@ func TestRunWithEmptyQueueDoesNothing(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -425,6 +565,7 @@ func TestRunCoalescesMultipleTriggersForSameSessionIntoOneRead(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -463,6 +604,7 @@ func TestRunSucceedsWhenEveryDocDeclines(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -512,6 +654,7 @@ func TestRunFailsWhenWriterEchoesUnchangedContent(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -544,6 +687,7 @@ func TestRunFailsWhenDocWriterReturnsEmptyOutput(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {
@@ -573,6 +717,7 @@ func TestRunNoNewTranscriptEntriesIsNotAFailure(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -590,7 +735,7 @@ func TestBuildDocPromptIncludesOwnContentAndEntries(t *testing.T) {
 	entries := []scribe.Entry{
 		{Role: "user", Text: "do the thing", Timestamp: time.Date(2026, 8, 8, 12, 0, 0, 0, time.UTC)},
 	}
-	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck, testRedactor())
 	for _, want := range []string{"log content", "do the thing", noChangeSentinel} {
 		if !contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
@@ -606,7 +751,7 @@ func TestBuildDocPromptIncludesOwnContentAndEntries(t *testing.T) {
 // never show up.
 func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
-	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck)
+	prompt := buildDocPrompt(scribe.DocChangelog, "log content", entries, CodeWeightCheck, testRedactor())
 
 	leaks := []string{
 		"one block per decision",   // DECISIONS guidance
@@ -632,12 +777,12 @@ func TestBuildDocPromptDoesNotLeakOtherDocsGuidance(t *testing.T) {
 func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "scrapping the plan"}}
 
-	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries, CodeWeightCheck)
+	projectPrompt := buildDocPrompt(scribe.DocProject, "current", entries, CodeWeightCheck, testRedactor())
 	if !contains(projectPrompt, "normal case") || !contains(projectPrompt, "remove that") {
 		t.Fatalf("PROJECT prompt missing correction-path guidance:\n%s", projectPrompt)
 	}
 
-	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries, CodeWeightCheck)
+	decisionsPrompt := buildDocPrompt(scribe.DocDecisions, "current", entries, CodeWeightCheck, testRedactor())
 	if !contains(decisionsPrompt, "dropped") || !contains(decisionsPrompt, "why") {
 		t.Fatalf("DECISIONS prompt missing correction-path guidance:\n%s", decisionsPrompt)
 	}
@@ -651,7 +796,7 @@ func TestBuildDocPromptCorrectionPathGuidance(t *testing.T) {
 // filler.
 func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "fixed the bug"}}
-	prompt := buildDocPrompt(scribe.DocJournal, "current", entries, CodeWeightCheck)
+	prompt := buildDocPrompt(scribe.DocJournal, "current", entries, CodeWeightCheck, testRedactor())
 
 	for _, want := range []string{
 		"confidently wrong", // what it wants
@@ -672,7 +817,7 @@ func TestBuildDocPromptJournalGuidanceTeachesWhatsWorthCapturing(t *testing.T) {
 func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
 	entries := []scribe.Entry{{Role: "user", Text: "shipped it"}}
 
-	check := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightCheck)
+	check := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightCheck, testRedactor())
 	if !contains(check, "verify") {
 		t.Fatalf("CodeWeightCheck prompt should say 'verify':\n%s", check)
 	}
@@ -680,12 +825,12 @@ func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
 		t.Fatalf("CodeWeightCheck prompt should not offer to source content from code:\n%s", check)
 	}
 
-	full := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightFull)
+	full := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightFull, testRedactor())
 	if !contains(full, "may use it to source") {
 		t.Fatalf("CodeWeightFull prompt should say it may source content from code:\n%s", full)
 	}
 
-	off := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightOff)
+	off := buildDocPrompt(scribe.DocChangelog, "x", entries, CodeWeightOff, testRedactor())
 	if !contains(off, "do not have code access") {
 		t.Fatalf("CodeWeightOff prompt should say code access is off:\n%s", off)
 	}
@@ -697,6 +842,35 @@ func TestBuildDocPromptCodeWeightChangesText(t *testing.T) {
 	d.CodeWeight = CodeWeightFull
 	if got := d.codeWeight(); got != CodeWeightFull {
 		t.Fatalf("expected an explicitly set CodeWeight to be honored, got %q", got)
+	}
+}
+
+// TestParseCodeWeight pins down the config-string-to-CodeWeight conversion
+// cmd/scribe/run.go needs (docs/phases/04-config-and-safety.md: "converting
+// a config string to a CodeWeight is a function someone else can call").
+// The three recognised values must round-trip exactly, and anything else —
+// typo, empty string, a value from some future config version — must be a
+// loud error rather than a silent fallback to the safe default.
+func TestParseCodeWeight(t *testing.T) {
+	valid := map[string]CodeWeight{
+		"check": CodeWeightCheck,
+		"full":  CodeWeightFull,
+		"off":   CodeWeightOff,
+	}
+	for in, want := range valid {
+		got, err := ParseCodeWeight(in)
+		if err != nil {
+			t.Errorf("ParseCodeWeight(%q): unexpected error: %v", in, err)
+		}
+		if got != want {
+			t.Errorf("ParseCodeWeight(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	for _, in := range []string{"", "Check", "CHECK", "checked", "verify", "unknown"} {
+		if _, err := ParseCodeWeight(in); err == nil {
+			t.Errorf("ParseCodeWeight(%q): expected an error, got nil", in)
+		}
 	}
 }
 
@@ -745,7 +919,7 @@ func TestParseGateOutput(t *testing.T) {
 // gateProductLevel called the writer anyway and ignored the answer.
 func TestGateProductLevelSkipsClassificationWithoutKeywordHit(t *testing.T) {
 	w := &fakeWriter{}
-	deps := Deps{Writer: w}
+	deps := Deps{Writer: w, Redactor: testRedactor()}
 	entries := []scribe.Entry{{Role: "user", Text: "fixed a typo"}}
 
 	gateIn, err := gateProductLevel(deps, entries)
@@ -765,7 +939,7 @@ func TestGateProductLevelSkipsClassificationWithoutKeywordHit(t *testing.T) {
 // classifier, whose answer is what actually decides.
 func TestGateProductLevelAsksClassifierOnKeywordHit(t *testing.T) {
 	w := &fakeWriter{outputs: []string{"NO"}}
-	deps := Deps{Writer: w}
+	deps := Deps{Writer: w, Redactor: testRedactor()}
 	entries := []scribe.Entry{{Role: "user", Text: "we decided to drop the queue idea"}}
 
 	gateIn, err := gateProductLevel(deps, entries)
@@ -816,6 +990,7 @@ func TestPartialDocFailureKeepsTheDocsThatSucceeded(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w, Log: &log,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -853,6 +1028,7 @@ func TestGateFailureDoesNotDiscardHistoryEdits(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err != nil {
@@ -882,6 +1058,7 @@ func TestAllDocCallsFailingIsStillAFailedRun(t *testing.T) {
 	deps := Deps{
 		Queue: q, Docs: store, Writer: w,
 		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
 	}
 
 	if err := Run(deps); err == nil {

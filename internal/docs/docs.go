@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/layout"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -95,7 +96,17 @@ var ErrStateDocTooLarge = errors.New("docs: state doc content exceeds size cap")
 
 // Store is a handle on one repo's docs/scribe/ directory.
 type Store struct {
-	dir string // <repoRoot>/docs/scribe
+	repoRoot string // needed for lastrun.json, which lives under .scribe/, a sibling of docs/scribe/ rather than inside it
+	dir      string // <repoRoot>/docs/scribe
+
+	// mode is the phase-06 history layout for this repo (see internal/layout).
+	// It only affects WriteHistory: Shared appends to the single CHANGELOG.md
+	// / JOURNAL.md (the original behaviour), PerSession writes one file per
+	// session and regenerates the top-level doc as a rollup over them. The
+	// zero value ("") behaves as Shared, which is what Open records for
+	// back-compat — every caller that still uses Open (diff, status, init
+	// seeding) keeps the single-file behaviour it always had.
+	mode layout.Mode
 
 	// stateCap and historyCap override DefaultStateCap and DefaultHistoryCap
 	// when non-zero. Set via SetCaps; zero (the zero value) means "use the
@@ -114,11 +125,26 @@ type Store struct {
 // exist yet. It does not create the four files — those are created lazily
 // on first Read (or first Write/Append), each with a sensible header.
 func Open(repoRoot string) (*Store, error) {
+	// Open predates the layout choice, so it keeps the shared, single-file
+	// behaviour it always had. Callers that don't care about the phase-06
+	// per-session split (scribe diff, scribe status, init's seeding pass)
+	// keep calling this; the worker's live run path uses OpenWithLayout.
+	return OpenWithLayout(repoRoot, layout.Shared)
+}
+
+// OpenWithLayout is Open with the phase-06 history layout made explicit. mode
+// is recorded on the Store and consulted only by WriteHistory: it decides
+// whether a history entry appends to the single CHANGELOG.md / JOURNAL.md
+// (layout.Shared) or writes its own per-session file plus a regenerated
+// rollup (layout.PerSession). Everything else about the Store is identical to
+// Open, so the two state docs, the size caps, rotation and the `scribe diff`
+// snapshot behave the same regardless of mode.
+func OpenWithLayout(repoRoot string, mode layout.Mode) (*Store, error) {
 	dir := filepath.Join(repoRoot, scribe.DocsDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("docs: create %s: %w", dir, err)
 	}
-	return &Store{dir: dir}, nil
+	return &Store{repoRoot: repoRoot, dir: dir, mode: mode}, nil
 }
 
 // SetCaps overrides this store's default size caps, in bytes. Pass 0 for
@@ -212,9 +238,20 @@ func (s *Store) WriteState(doc scribe.Doc, content string) error {
 	if cap := s.capFor(doc); int64(len(content)) > cap {
 		return fmt.Errorf("docs: %s content is %d bytes, over its %d byte cap: %w", doc, len(content), cap, ErrStateDocTooLarge)
 	}
+
+	// Captured before the write so the snapshot (see lastrun.go) has
+	// something to diff against. Read seeds the doc with its default
+	// header if this is the first write ever, which is exactly the right
+	// "before" for a doc going from nothing to something.
+	before, err := s.Read(doc)
+	if err != nil {
+		return err
+	}
+
 	if err := atomicWrite(s.Path(doc), []byte(content)); err != nil {
 		return fmt.Errorf("docs: write %s: %w", doc, err)
 	}
+	s.recordChange(doc, before, content)
 	return nil
 }
 
@@ -244,9 +281,11 @@ func (s *Store) AppendHistory(doc scribe.Doc, entry string) error {
 		return fmt.Errorf("docs: rotate %s: %w", doc, err)
 	}
 
-	if err := atomicWrite(s.Path(doc), []byte(serializeHistoryDoc(title, blocks))); err != nil {
+	after := serializeHistoryDoc(title, blocks)
+	if err := atomicWrite(s.Path(doc), []byte(after)); err != nil {
 		return fmt.Errorf("docs: append %s: %w", doc, err)
 	}
+	s.recordChange(doc, cur, after)
 	return nil
 }
 

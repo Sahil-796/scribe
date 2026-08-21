@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -68,7 +69,11 @@ func keywordPrefilter(entries []scribe.Entry) bool {
 // "writer answers it in one cheap classification step" gate phase 03 item 2
 // prefers over a brittle keyword heuristic alone — keywordPrefilter decides
 // whether it's worth asking at all, this decides the actual answer.
-func buildGatePrompt(entries []scribe.Entry) string {
+// buildGatePrompt takes a Redactor for the same reason buildDocPrompt does
+// (see its doc comment): this call embeds raw transcript entries too, and
+// is a writer call like any other — nothing about being a cheap
+// classification step exempts it from the choke point.
+func buildGatePrompt(entries []scribe.Entry, r *redact.Redactor) string {
 	var b strings.Builder
 	b.WriteString(`Answer one question about the conversation excerpt below: does it
 contain product-level talk — a decision made, dropped, or superseded; a
@@ -85,7 +90,7 @@ explanation.
 --- conversation ---
 `)
 	writeEntries(&b, entries)
-	return b.String()
+	return r.Redact(b.String())
 }
 
 // parseGateOutput reads the classification call's answer. Anything that
@@ -228,7 +233,14 @@ code only checks it.
 // other doc's content is included — a CHANGELOG call has no business
 // reading DECISIONS.md's current text, and keeping the prompt small keeps
 // the job focused (phase 03 item 1).
-func buildDocPrompt(doc scribe.Doc, currentContent string, entries []scribe.Entry, weight CodeWeight) string {
+//
+// r is the redaction choke point (phase 04, docs/phases/04-config-and-safety.md):
+// the fully assembled prompt — transcript entries and current doc content
+// alike — is redacted in one pass right before it's returned, so there is
+// exactly one place in this function where content could leak unredacted,
+// and it's the return statement. r is required; passing a nil Redactor
+// panics (see internal/redact) rather than silently sending raw content.
+func buildDocPrompt(doc scribe.Doc, currentContent string, entries []scribe.Entry, weight CodeWeight, r *redact.Redactor) string {
 	spec, ok := docPrompts[doc]
 	if !ok {
 		panic(fmt.Sprintf("worker: buildDocPrompt: no prompt spec for doc %q", doc))
@@ -261,7 +273,7 @@ fence, no explanation before or after.
 	b.WriteString("\n--- new conversation since the last run ---\n")
 	writeEntries(&b, entries)
 
-	return b.String()
+	return r.Redact(b.String())
 }
 
 // projectRewriteNotice is appended to DECISIONS.md's prompt when PROJECT.md
@@ -279,7 +291,17 @@ fence, no explanation before or after.
 // Handing DECISIONS the before and after of PROJECT is the minimum context
 // that makes the obligation answerable. It costs nothing when PROJECT
 // didn't change, because then this isn't appended at all.
-func projectRewriteNotice(before, after string) string {
+//
+// before/after are PROJECT.md content — repo-derived, but ultimately
+// sourced from the same transcript this run is processing, so they go
+// through r like everything else that reaches a prompt. This text is
+// appended to buildDocPrompt's already-redacted output by the caller
+// (runDocWriterWithContext in worker.go); redacting it here rather than
+// relying on the caller to redact the concatenation keeps every piece of
+// text this package hands to a writer self-redacting at the point it's
+// produced, so there's no assembly step anywhere that has to remember to
+// call r itself.
+func projectRewriteNotice(before, after string, r *redact.Redactor) string {
 	var b strings.Builder
 	b.WriteString(`
 
@@ -296,5 +318,5 @@ this needs no DECISIONS entry on its own.
 `)
 	fmt.Fprintf(&b, "--- PROJECT.md before this run ---\n%s\n", before)
 	fmt.Fprintf(&b, "\n--- PROJECT.md after this run ---\n%s\n", after)
-	return b.String()
+	return r.Redact(b.String())
 }

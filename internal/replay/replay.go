@@ -30,6 +30,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 	"github.com/Sahil-796/scribe/internal/transcript"
 )
@@ -154,6 +155,14 @@ type Options struct {
 	// Emit receives one produced history entry. The caller decides where it
 	// lands — real docs or a dry-run preview. Replay itself writes no docs.
 	Emit func(doc scribe.Doc, entry string) error
+
+	// Redactor strips secrets from transcript content before it reaches a
+	// writer prompt. Required, not optional: Run refuses to start without
+	// one. Replay is the single largest exposure scribe has — it feeds a
+	// repo's entire session history to the writer in one pass — so a nil
+	// here defaulting to "no redaction" would be the worst version of the
+	// silent failure internal/redact exists to rule out.
+	Redactor *redact.Redactor
 }
 
 // Run replays the sessions in chunks, calling Emit for each produced entry
@@ -177,6 +186,13 @@ func Run(o Options) error {
 	}
 	if o.RepoRoot == "" {
 		return fmt.Errorf("replay: Options.RepoRoot is required")
+	}
+	if o.Redactor == nil {
+		// Refused up front rather than defaulted. A replay pass is the
+		// single largest batch of transcript content scribe ever sends
+		// anywhere, and "it ran fine, it just didn't redact" is not a
+		// state anyone would notice from the outside.
+		return fmt.Errorf("replay: Options.Redactor is required — replay sends whole session histories to the writer and must never do so unredacted")
 	}
 
 	maxEntries := o.MaxEntriesPerChunk
@@ -273,7 +289,7 @@ func Run(o Options) error {
 // same parseReplayEdits (parse.go) — it already accepts either doc key, so
 // there is no need for a second parser.
 func runChunk(o Options, entries []scribe.Entry) error {
-	changelogOut, err := o.Writer.Run(buildChangelogPrompt(entries))
+	changelogOut, err := o.Writer.Run(buildChangelogPrompt(entries, o.Redactor))
 	if err != nil {
 		return fmt.Errorf("writer (changelog): %w", err)
 	}
@@ -282,7 +298,7 @@ func runChunk(o Options, entries []scribe.Entry) error {
 		return fmt.Errorf("parse changelog writer output: %w", err)
 	}
 
-	journalOut, err := o.Writer.Run(buildJournalPrompt(entries))
+	journalOut, err := o.Writer.Run(buildJournalPrompt(entries, o.Redactor))
 	if err != nil {
 		return fmt.Errorf("writer (journal): %w", err)
 	}

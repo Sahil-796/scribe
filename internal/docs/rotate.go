@@ -163,6 +163,19 @@ func IsArchivePointer(block string) bool {
 	return isArchivePointer(block)
 }
 
+// ParseArchivePointer exposes parseArchivePointer to callers outside this
+// package for the same reason as SplitBlocks and IsArchivePointer:
+// `scribe diff` (cmd/scribe/diff.go) needs to tell a rotation apart from
+// real content loss when rendering a history doc's before/after diff — a
+// run that rotates old entries out removes a lot of text from the live
+// file, and without reading the pointer back that looks identical to the
+// writer having deleted it. Reading the pointer's own recorded count and
+// path is exact; re-deriving "was this a rotation" from the raw line diff
+// would be a guess.
+func ParseArchivePointer(block string) (n int, relPath string, ok bool) {
+	return parseArchivePointer(block)
+}
+
 // archiveTitle is the header line a new archive file is seeded with.
 func archiveTitle(doc scribe.Doc) string {
 	return strings.TrimRight(defaultHeader[doc], "\n") + " (archived)"

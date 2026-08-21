@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/install"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -93,6 +94,129 @@ func TestRun_Initialised_Enqueues(t *testing.T) {
 	}
 	if gotTrigger.EnqueuedAt.IsZero() || time.Since(gotTrigger.EnqueuedAt) > time.Minute {
 		t.Fatalf("trigger EnqueuedAt looks wrong: %v", gotTrigger.EnqueuedAt)
+	}
+}
+
+// initedRepoWithConfig creates a t.TempDir() with a real .scribe/config.json
+// (via install.WriteConfig, not just a bare .scribe directory), so IsPaused
+// has something real to read. cfg is mutated in place by withPause before
+// writing, so tests can hand it a Pause without repeating the boilerplate.
+func initedRepoWithConfig(t *testing.T, cfg install.Config) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := install.WriteConfig(dir, cfg); err != nil {
+		t.Fatalf("writing test config: %v", err)
+	}
+	return dir
+}
+
+// TestRun_Paused_ExitsZeroQuietlyWithoutEnqueueing is the enforcement half
+// of this unit's job: a `scribe off` that still let triggers reach the
+// queue would just delay the writer, not pause it, since the queue drains
+// the moment the pause lapses. So the hook must treat "paused" exactly
+// like "never initialised" — exit 0, say nothing, enqueue nothing.
+func TestRun_Paused_ExitsZeroQuietlyWithoutEnqueueing(t *testing.T) {
+	dir := initedRepoWithConfig(t, install.Config{
+		Agent: "opencode",
+		Pause: &install.Pause{Since: time.Now(), Stay: true},
+	})
+
+	called := false
+	enqueue := func(repoRoot string, tr scribe.Trigger) error {
+		called = true
+		return nil
+	}
+
+	in := bytes.NewReader(payloadJSON(t, scribe.HookPayload{
+		SessionID:      "sess-paused",
+		TranscriptPath: "/tmp/transcript.jsonl",
+		CWD:            dir,
+		HookEventName:  "Stop",
+	}))
+	var errBuf bytes.Buffer
+
+	code := Run(in, &errBuf, enqueue)
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d", code, ExitOK)
+	}
+	if called {
+		t.Fatal("enqueue was called for a paused repo")
+	}
+	if errBuf.Len() != 0 {
+		t.Fatalf("expected no stderr output while paused, got %q", errBuf.String())
+	}
+}
+
+// TestRun_PauseExpired_StillEnqueues is the other side of the same check:
+// a lapsed pause (Until in the past, Stay false) must not silently keep
+// blocking triggers forever — IsPaused evaluates expiry on read, and the
+// hook has to actually rely on that rather than caching "was paused" from
+// some earlier call.
+func TestRun_PauseExpired_StillEnqueues(t *testing.T) {
+	past := time.Now().Add(-24 * time.Hour)
+	dir := initedRepoWithConfig(t, install.Config{
+		Agent: "opencode",
+		Pause: &install.Pause{Since: past.Add(-time.Hour), Until: &past},
+	})
+
+	called := false
+	enqueue := func(repoRoot string, tr scribe.Trigger) error {
+		called = true
+		return nil
+	}
+
+	in := bytes.NewReader(payloadJSON(t, scribe.HookPayload{
+		SessionID:      "sess-expired-pause",
+		TranscriptPath: "/tmp/transcript.jsonl",
+		CWD:            dir,
+		HookEventName:  "Stop",
+	}))
+	var errBuf bytes.Buffer
+
+	code := Run(in, &errBuf, enqueue)
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d, stderr=%q", code, ExitOK, errBuf.String())
+	}
+	if !called {
+		t.Fatal("enqueue was not called for a repo whose pause already lapsed")
+	}
+}
+
+// TestRun_InitialisedNoConfig_TreatsMissingConfigAsNotPaused pins down
+// isPaused's fail-open behavior for the case TestRun_Initialised_Enqueues
+// above already exercises incidentally (a .scribe dir with no config.json
+// inside it — install.ReadConfig returns ErrNotInitialised even though
+// FindRepoRoot already said yes). A config read that can fail must not
+// turn into the hook silently refusing to enqueue.
+func TestRun_InitialisedNoConfig_TreatsMissingConfigAsNotPaused(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, scribe.StateDir), 0o755); err != nil {
+		t.Fatalf("mkdir .scribe: %v", err)
+	}
+
+	called := false
+	enqueue := func(repoRoot string, tr scribe.Trigger) error {
+		called = true
+		return nil
+	}
+
+	in := bytes.NewReader(payloadJSON(t, scribe.HookPayload{
+		SessionID:      "sess-no-config",
+		TranscriptPath: "/tmp/transcript.jsonl",
+		CWD:            dir,
+		HookEventName:  "Stop",
+	}))
+	var errBuf bytes.Buffer
+
+	code := Run(in, &errBuf, enqueue)
+
+	if code != ExitOK {
+		t.Fatalf("exit code = %d, want %d, stderr=%q", code, ExitOK, errBuf.String())
+	}
+	if !called {
+		t.Fatal("enqueue was not called for an initialised repo with no config.json yet")
 	}
 }
 

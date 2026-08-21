@@ -5,8 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
+
+func testRedactor() *redact.Redactor {
+	return redact.New(
+		[]string{"api_key", "token", "password", "secret"},
+		[]string{"**/.env*", "**/secrets/**"},
+	)
+}
 
 func testEntries() []scribe.Entry {
 	return []scribe.Entry{
@@ -16,7 +24,7 @@ func testEntries() []scribe.Entry {
 }
 
 func TestBuildChangelogPrompt(t *testing.T) {
-	p := buildChangelogPrompt(testEntries())
+	p := buildChangelogPrompt(testEntries(), testRedactor())
 
 	for _, want := range []string{
 		"CHANGELOG.md",
@@ -39,7 +47,7 @@ func TestBuildChangelogPrompt(t *testing.T) {
 }
 
 func TestBuildJournalPrompt(t *testing.T) {
-	p := buildJournalPrompt(testEntries())
+	p := buildJournalPrompt(testEntries(), testRedactor())
 
 	for _, want := range []string{
 		"JOURNAL.md",
@@ -59,8 +67,8 @@ func TestBuildJournalPrompt(t *testing.T) {
 
 func TestPromptsShareChunkContext(t *testing.T) {
 	entries := testEntries()
-	cp := buildChangelogPrompt(entries)
-	jp := buildJournalPrompt(entries)
+	cp := buildChangelogPrompt(entries, testRedactor())
+	jp := buildJournalPrompt(entries, testRedactor())
 
 	// Both prompts must warn against treating discussion as shipment and
 	// against restating/contradicting other chunks — that framing must not
@@ -73,6 +81,49 @@ func TestPromptsShareChunkContext(t *testing.T) {
 			t.Errorf("journal prompt missing shared chunk context %q", want)
 		}
 	}
+}
+
+// TestRedactionChokePointCoversEveryPromptBuilder is this package's half of
+// the phase 04 requirement (docs/phases/04-config-and-safety.md): a test
+// that fails if a prompt builder in this package learns a second way to
+// reach transcript content, bypassing internal/redact. Both builders this
+// package owns are enumerated here by name.
+func TestRedactionChokePointCoversEveryPromptBuilder(t *testing.T) {
+	const secret = "sk-supersecretvalue1234567890abcdef"
+	entries := []scribe.Entry{{Role: "user", Text: "api_key=" + secret}}
+	r := testRedactor()
+
+	rendered := map[string]string{
+		"buildChangelogPrompt": buildChangelogPrompt(entries, r),
+		"buildJournalPrompt":   buildJournalPrompt(entries, r),
+	}
+
+	for name, prompt := range rendered {
+		if strings.Contains(prompt, secret) {
+			t.Errorf("%s leaked the planted secret into the rendered prompt:\n%s", name, prompt)
+		}
+		if !strings.Contains(prompt, "[redacted:") {
+			t.Errorf("%s shows no redaction placeholder — expected the planted secret to be caught, got:\n%s", name, prompt)
+		}
+	}
+}
+
+func TestBuildChangelogPromptPanicsOnNilRedactor(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected buildChangelogPrompt with a nil Redactor to panic")
+		}
+	}()
+	buildChangelogPrompt(testEntries(), nil)
+}
+
+func TestBuildJournalPromptPanicsOnNilRedactor(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected buildJournalPrompt with a nil Redactor to panic")
+		}
+	}()
+	buildJournalPrompt(testEntries(), nil)
 }
 
 func TestRenderChunkFormatsEntries(t *testing.T) {

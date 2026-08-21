@@ -10,9 +10,12 @@
 // doc gets its own call, its own guidance, and only its own current
 // content, rather than one prompt trying to do four jobs at once — plus a
 // CodeWeight knob controlling how much each of those calls may lean on
-// read-only repo code access. Redaction and install-config plumbing are
-// still phase 04; CodeWeight lives only as a field on Deps here, not wired
-// to any config file yet.
+// read-only repo code access. Phase 04 finishes wiring both of phase 03's
+// deferred items: redaction (see prompt.go's use of *redact.Redactor) and
+// CodeWeight's path from config to prompt — ParseCodeWeight below is what a
+// caller (cmd/scribe/run.go) uses to turn install.Config.Code.Weight's
+// plain string into the CodeWeight this package expects, so a config file
+// can drive the same knob a Deps literal always could.
 //
 // This package depends on two sibling packages by contract, not by import:
 // internal/queue (unit 1B) and internal/transcript (unit 1C) were still
@@ -32,7 +35,10 @@ import (
 	"io"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/attribution"
 	"github.com/Sahil-796/scribe/internal/docs"
+	"github.com/Sahil-796/scribe/internal/layout"
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -53,7 +59,23 @@ type Queue interface {
 type DocStore interface {
 	ReadAll() (map[scribe.Doc]string, error)
 	WriteState(doc scribe.Doc, content string) error
-	AppendHistory(doc scribe.Doc, entry string) error
+
+	// WriteHistory records one CHANGELOG/JOURNAL entry, crediting author and
+	// tagging it with the run's session metadata. It replaces the worker's
+	// old direct AppendHistory call: the store now owns the phase-06 layout
+	// choice (shared byline-append vs per-session file + rollup), so the
+	// worker hands it the raw entry plus who and which session, and the store
+	// decides how that lands on disk. See internal/docs's WriteHistory.
+	WriteHistory(doc scribe.Doc, meta layout.SessionMeta, author attribution.Author, entry string) error
+
+	// ResetRun starts a fresh before/after snapshot for `scribe diff`.
+	// Part of the interface rather than an optional type assertion on the
+	// concrete store: the snapshot recorder is a deliberate no-op until
+	// ResetRun has been called, so a DocStore that quietly lacked this
+	// would leave `scribe diff` permanently answering "no run has been
+	// recorded yet" while every test still passed. Making it a method
+	// everyone must implement is what turns that into a compile error.
+	ResetRun() error
 }
 
 // TranscriptReader matches internal/transcript.Read's signature.
@@ -68,9 +90,7 @@ type OffsetSaver func(repoRoot string, o scribe.Offset) error
 // CodeWeight controls how much the writer's per-doc prompts tell it to lean
 // on its read-only repo code access, per locked decision 7 ("it can read
 // the code, but the transcript leads. Weighting is configurable; code
-// access can be turned off."). This is a worker Options knob, not config —
-// wiring it through internal/install's config file is phase 04 work and
-// outside this package's job.
+// access can be turned off.").
 type CodeWeight string
 
 const (
@@ -82,9 +102,42 @@ const (
 	// CodeWeightFull allows the writer to source doc content straight from
 	// the code, not just verify claims against it.
 	CodeWeightFull CodeWeight = "full"
-	// CodeWeightOff turns code access off for the writer entirely.
+	// CodeWeightOff turns code access off for the writer entirely: every
+	// per-doc prompt gets codeAccessInstructions' CodeWeightOff text
+	// ("You do not have code access for this run"), and none of them is
+	// told anything different — there is exactly one place in this
+	// package's prompts where code-access instructions are written
+	// (codeAccessInstructions in prompt.go), so "off" saying "off" there is
+	// the whole guarantee. Nothing in this package can stop the writer
+	// process itself from reading files (that's the connector's job, see
+	// internal/writer) — CodeWeight controls what the prompt *tells* the
+	// model to do with whatever access it has, the same way CodeWeightCheck
+	// relies on the model actually treating the repo as verification-only
+	// rather than a content source.
 	CodeWeightOff CodeWeight = "off"
 )
+
+// ParseCodeWeight converts install.Config's Code.Weight string
+// ("check"/"full"/"off") into a CodeWeight, for a caller wiring a repo's
+// config into Deps (cmd/scribe/run.go). This package can't reference
+// install.CodeWeightCheck etc. directly without importing internal/install,
+// which install.CodeConfig's own doc comment deliberately avoids the
+// reverse of (see internal/install/config.go: "kept as a string here so
+// this package stays free of a dependency on internal/worker") — so the
+// three literal strings are duplicated here, once, at the single point
+// they're parsed. An unrecognised value is a loud error, not a silent
+// fallback to CodeWeightCheck: a typo'd or corrupted config value silently
+// becoming "the safe default" would hide the fact that the operator's
+// actual setting was never honoured, which is a worse outcome than the run
+// simply refusing to start.
+func ParseCodeWeight(s string) (CodeWeight, error) {
+	switch CodeWeight(s) {
+	case CodeWeightCheck, CodeWeightFull, CodeWeightOff:
+		return CodeWeight(s), nil
+	default:
+		return "", fmt.Errorf("worker: unknown code weight %q (want %q, %q, or %q)", s, CodeWeightCheck, CodeWeightFull, CodeWeightOff)
+	}
+}
 
 // Deps wires the worker to the rest of the system. Every field is required
 // except CodeWeight, which defaults to CodeWeightCheck.
@@ -95,6 +148,25 @@ type Deps struct {
 	ReadTranscript TranscriptReader
 	LoadOffset     OffsetLoader
 	SaveOffset     OffsetSaver
+
+	// Sessions, if non-nil, is where the worker records one summary line +
+	// category per session per run, feeding docs/scribe/INDEX.md (see
+	// sessions.go and cmd/scribe/run.go). Optional: a
+	// nil Sessions skips session recording entirely — the doc-writing loop
+	// is unaffected, and this package's own tests leave it nil. A recording
+	// failure is logged, never fatal (see finishRun).
+	Sessions SessionRecorder
+
+	// Redactor is the phase 04 choke point every prompt builder in this
+	// package sends its assembled text through before a writer ever sees
+	// it (prompt.go's buildDocPrompt, buildGatePrompt and
+	// projectRewriteNotice all take it and redact their own output). It is
+	// required, not optional, unlike every other knob on this struct: Run
+	// rejects a nil Redactor with an error rather than falling back to
+	// sending content unredacted, because that fallback's failure mode is
+	// silent and permanent — see docs/phases/04-config-and-safety.md and
+	// internal/redact's package doc.
+	Redactor *redact.Redactor
 
 	// CodeWeight controls the per-doc prompts' code-access instructions.
 	// Zero value (empty string) behaves as CodeWeightCheck.
@@ -148,6 +220,14 @@ func (d Deps) logf(format string, args ...any) {
 // flag when it finishes and cover this trigger itself. This is the "busy?
 // -> mark pending, exit" branch in docs/PLAN.md's loop diagram.
 func Run(deps Deps) error {
+	// A nil Redactor must never behave like "redaction is off" — that
+	// fallback would be indistinguishable from working correctly right up
+	// until a real secret ships in a prompt, at which point it's too late
+	// to notice. Fail the run instead, loudly, before anything is read.
+	if deps.Redactor == nil {
+		return errors.New("worker: Deps.Redactor is required (a nil redactor would silently skip redaction — see internal/redact)")
+	}
+
 	got, err := deps.Queue.TryLock()
 	if err != nil {
 		return fmt.Errorf("worker: acquire lock: %w", err)
@@ -159,6 +239,20 @@ func Run(deps Deps) error {
 		return nil
 	}
 	defer deps.Queue.Unlock()
+
+	// Once per run, not once per drained batch: a run that loops on the
+	// pending flag (docs/PLAN.md's "pending set? run again") is still one
+	// run as far as `scribe diff` is concerned, and resetting inside the
+	// loop would throw away the earlier passes' before/after.
+	if err := deps.Docs.ResetRun(); err != nil {
+		// Not fatal. The snapshot exists so a human can ask what the last
+		// run changed; failing the actual doc-writing run because that
+		// debugging aid couldn't be initialised would be the tail wagging
+		// the dog. It degrades to "diff has nothing to show".
+		if deps.Log != nil {
+			fmt.Fprintf(deps.Log, "worker: could not start the run snapshot for `scribe diff`: %v\n", err)
+		}
+	}
 
 	for {
 		if err := runOnce(deps); err != nil {
@@ -216,6 +310,10 @@ func runOnce(deps Deps) error {
 
 	var allEntries []scribe.Entry
 	var offsetsToSave []pendingOffset
+	// Kept per session (not just concatenated into allEntries) because the
+	// phase 05 session summary is per session, not per run — INDEX.md has
+	// one line per session id. finishRun reads this to record each session.
+	entriesBySession := make(map[string][]scribe.Entry, len(order))
 
 	for _, sessionID := range order {
 		trig := bySession[sessionID]
@@ -234,6 +332,7 @@ func runOnce(deps Deps) error {
 		}
 
 		allEntries = append(allEntries, entries...)
+		entriesBySession[sessionID] = entries
 		offsetsToSave = append(offsetsToSave, pendingOffset{
 			repoRoot:  trig.RepoRoot,
 			sessionID: sessionID,
@@ -270,10 +369,25 @@ func runOnce(deps Deps) error {
 	// own. Nothing to apply, nothing to verify; the offset still advances
 	// below so this slice of transcript isn't re-read next run.
 	if len(docEdits) == 0 {
-		return saveOffsets(deps, offsetsToSave)
+		return finishRun(deps, offsetsToSave, order, entriesBySession)
 	}
 
-	if err := applyEdits(deps.Docs, docEdits); err != nil {
+	// Attribution and session metadata for this run's history writes. Both are
+	// derived from the run's primary session — the first id in order (the
+	// first trigger we drained). A coalesced multi-session run writes its one
+	// history entry per doc under that primary session id; that's acceptable
+	// and, in per-session layout, conflict-free by construction (one path per
+	// session id). author is resolved once here, not per doc: it's the same
+	// person for the whole run, and Resolve never fails (see
+	// internal/attribution). Summary is left empty in the base meta — the
+	// phase-05 per-session summary isn't computed until finishRun, so
+	// applyEdits derives a readable slug from each entry's own first line
+	// instead (see applyEdits).
+	primary := order[0]
+	author := attribution.Resolve(bySession[primary].RepoRoot)
+	baseMeta := layout.SessionMeta{Date: deps.now(), SessionID: primary}
+
+	if err := applyEdits(deps.Docs, docEdits, baseMeta, author); err != nil {
 		return fmt.Errorf("worker: apply edits: %w", err)
 	}
 
@@ -301,7 +415,36 @@ func runOnce(deps Deps) error {
 	// Only now, after every doc write above has succeeded and actually
 	// changed something, do offsets move. See the ordering comment above
 	// the function.
-	return saveOffsets(deps, offsetsToSave)
+	return finishRun(deps, offsetsToSave, order, entriesBySession)
+}
+
+// finishRun records each session's index summary (phase 05), then saves the
+// run's offsets. It sits in front of saveOffsets on both success paths — the
+// "wrote docs" path and the "everything was NO_CHANGE" path — because a
+// session that happened deserves an index line either way; whether the docs
+// changed is a separate question from whether work occurred.
+//
+// Recording is best-effort by design: a failed summary call (or a nil
+// Sessions) logs and moves on, and offsets still advance. The index is a
+// skimmable view of history, not the source of truth — failing
+// the whole run because that view couldn't be refreshed would be the tail
+// wagging the dog, exactly as with the `scribe diff` snapshot in Run. The
+// offset advancing regardless means a transient writer hiccup costs one
+// missing index line, not a permanently re-read transcript slice.
+func finishRun(deps Deps, offsets []pendingOffset, order []string, entriesBySession map[string][]scribe.Entry) error {
+	if deps.Sessions != nil {
+		now := deps.now()
+		for _, sessionID := range order {
+			entries := entriesBySession[sessionID]
+			if len(entries) == 0 {
+				continue // nothing new read for this session this run
+			}
+			if err := recordSession(deps, sessionID, entries, now); err != nil {
+				deps.logf("worker: session index not updated for %s: %v\n", sessionID, err)
+			}
+		}
+	}
+	return saveOffsets(deps, offsets)
 }
 
 // pendingOffset is one session's new read position, queued up during the
@@ -401,7 +544,7 @@ func collectEdits(deps Deps, current map[scribe.Doc]string, entries []scribe.Ent
 
 		extra := ""
 		if after, rewritten := result[scribe.DocProject]; rewritten {
-			extra = projectRewriteNotice(current[scribe.DocProject], after)
+			extra = projectRewriteNotice(current[scribe.DocProject], after, deps.Redactor)
 		}
 		if err := runDocWriterWithContext(deps, scribe.DocDecisions, current, entries, extra, result); err != nil {
 			errs = append(errs, err)
@@ -450,7 +593,7 @@ func gateProductLevel(deps Deps, entries []scribe.Entry) (bool, error) {
 	if !keywordPrefilter(entries) {
 		return false, nil
 	}
-	out, err := deps.Writer.Run(buildGatePrompt(entries))
+	out, err := deps.Writer.Run(buildGatePrompt(entries, deps.Redactor))
 	if err != nil {
 		return false, fmt.Errorf("worker: gate classification run: %w", err)
 	}
@@ -467,7 +610,7 @@ func runDocWriter(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entrie
 // after the standard per-doc prompt. Only the correction path uses it, to
 // tell DECISIONS.md what PROJECT.md just changed; everything else passes "".
 func runDocWriterWithContext(deps Deps, d scribe.Doc, current map[scribe.Doc]string, entries []scribe.Entry, extra string, result edits) error {
-	prompt := buildDocPrompt(d, current[d], entries, deps.codeWeight()) + extra
+	prompt := buildDocPrompt(d, current[d], entries, deps.codeWeight(), deps.Redactor) + extra
 	out, err := deps.Writer.Run(prompt)
 	if err != nil {
 		return fmt.Errorf("worker: writer run for %s: %w", d, err)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/Sahil-796/scribe/internal/docs"
 	"github.com/Sahil-796/scribe/internal/install"
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/replay"
 	"github.com/Sahil-796/scribe/internal/scribe"
 	"github.com/Sahil-796/scribe/internal/seed"
@@ -154,10 +155,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		// onboarding question the wizard asks (docs in git) has no answer
 		// here, so it takes the conservative default — docs stay out of
 		// git — and --docs-in-git lets a script say otherwise explicitly.
-		// Layout has no flag at all (OPEN-ITEMS item 31): phase 06, the only
-		// thing that would read it, doesn't exist, so it's always the
-		// recorded default rather than something a script can (wrongly)
-		// believe it's choosing.
+		// Layout has no flag: phase 06 re-added the layout question to the
+		// interactive wizard, but a non-interactive init takes the
+		// conflict-free per-session default rather than exposing yet another
+		// flag. A script that genuinely wants shared can set config.json's
+		// "layout" directly.
 		answers = wizard.Answers{
 			Agent:     firstNonEmpty(agentFlag, wizard.DefaultAgent),
 			Model:     firstNonEmpty(modelFlag, wizard.DefaultModel),
@@ -183,7 +185,20 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	fmt.Fprintf(out, "scribe init: %s\n\n", repoRoot)
 
-	preview, err := computePreview(repoRoot, w, out, errOut)
+	// The redactor for init's two passes comes from the user's global
+	// config, defaulted — there is no repo config yet, that's what init is
+	// about to write. Seeding reads the repo and replay reads every past
+	// transcript, so this is the largest volume of content scribe ever
+	// sends anywhere; doing it against the built-in defaults alone would
+	// ignore a globally-configured redact key on the one pass where it
+	// matters most.
+	globalCfg, err := install.GlobalDefaults()
+	if err != nil {
+		return fmt.Errorf("scribe init: %w", err)
+	}
+	red := redact.New(globalCfg.Privacy.Redact, globalCfg.Privacy.Ignore)
+
+	preview, err := computePreview(repoRoot, w, red, out, errOut)
 	if err != nil {
 		return err
 	}
@@ -194,6 +209,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	if !apply {
 		fmt.Fprintln(out, "\nDry run — nothing was written to docs/scribe, and no hook was installed.")
 		fmt.Fprintln(out, "Re-run with --apply once you're happy with the preview.")
+		fmt.Fprintln(out, "Working in other repos too? \"scribe nudge --install\" adds a one-time reminder if you go a while without running init there.")
 		return nil
 	}
 
@@ -224,9 +240,9 @@ func runInit(cmd *cobra.Command, _ []string) error {
 // nothing, and a first `scribe init` producing an empty PROJECT.md with no
 // error is exactly the failure mode that has to be caught here, not
 // discovered later by a confused user.
-func computePreview(repoRoot string, w scribe.Writer, out, errOut io.Writer) (map[scribe.Doc]string, error) {
+func computePreview(repoRoot string, w scribe.Writer, red *redact.Redactor, out, errOut io.Writer) (map[scribe.Doc]string, error) {
 	fmt.Fprintln(out, "Seeding PROJECT.md and DECISIONS.md from the repo...")
-	seeded, err := seed.Run(repoRoot, w)
+	seeded, err := seed.Run(repoRoot, w, red)
 	if err != nil {
 		// seed.Run's own Parse already refuses an empty/unparseable writer
 		// response, so this is already a loud failure, not a silent one.
@@ -261,6 +277,7 @@ func computePreview(repoRoot string, w scribe.Writer, out, errOut io.Writer) (ma
 	replayErr := replay.Run(replay.Options{
 		RepoRoot:  repoRoot,
 		Writer:    w,
+		Redactor:  red,
 		StatePath: previewStatePath(repoRoot),
 		Progress: func(status replay.ChunkStatus, done, total int, label string) {
 			if total == 0 {
@@ -377,6 +394,7 @@ func applyPreview(repoRoot string, preview map[scribe.Doc]string, answers wizard
 		fmt.Fprintf(out, "%s/ is committed to git — the docs are part of the repo.\n", scribe.DocsDir)
 	}
 	fmt.Fprintln(out, "\nscribe is now on for this repo — the four docs stay current after every reply.")
+	fmt.Fprintln(out, "Working in other repos too? \"scribe nudge --install\" adds a one-time reminder if you go a while without running init there.")
 	return nil
 }
 

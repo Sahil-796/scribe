@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -57,6 +58,13 @@ func (w *fakeWriter) Run(prompt string) (string, error) {
 	return w.out, nil
 }
 
+func testRedactor() *redact.Redactor {
+	return redact.New(
+		[]string{"api_key", "token", "password", "secret"},
+		[]string{"**/.env*", "**/secrets/**"},
+	)
+}
+
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -76,7 +84,7 @@ func TestScan(t *testing.T) {
 		writeFile(t, filepath.Join(root, "node_modules", "leftpad", "index.js"), "junk")
 		writeFile(t, filepath.Join(root, ".git", "HEAD"), "ref: refs/heads/main")
 
-		f, err := Scan(root)
+		f, err := Scan(root, testRedactor())
 		if err != nil {
 			t.Fatalf("Scan: %v", err)
 		}
@@ -105,7 +113,7 @@ func TestScan(t *testing.T) {
 		writeFile(t, filepath.Join(root, "secrets.txt"), "shh")
 		writeFile(t, filepath.Join(root, "keep.txt"), "keep me")
 
-		f, err := Scan(root)
+		f, err := Scan(root, testRedactor())
 		if err != nil {
 			t.Fatalf("Scan: %v", err)
 		}
@@ -125,7 +133,7 @@ func TestScan(t *testing.T) {
 		big := strings.Repeat("x", maxFileBytes*2)
 		writeFile(t, filepath.Join(root, "README.md"), big)
 
-		f, err := Scan(root)
+		f, err := Scan(root, testRedactor())
 		if err != nil {
 			t.Fatalf("Scan: %v", err)
 		}
@@ -141,7 +149,7 @@ func TestScan(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, filepath.Join(root, "docs", "scribe", "PROJECT.md"), "# Project\nExisting content.")
 
-		f, err := Scan(root)
+		f, err := Scan(root, testRedactor())
 		if err != nil {
 			t.Fatalf("Scan: %v", err)
 		}
@@ -158,7 +166,7 @@ func TestScan(t *testing.T) {
 			t.Skipf("symlinks not supported: %v", err)
 		}
 
-		f, err := Scan(root)
+		f, err := Scan(root, testRedactor())
 		if err != nil {
 			t.Fatalf("Scan: %v", err)
 		}
@@ -173,9 +181,53 @@ func TestScan(t *testing.T) {
 	})
 
 	t.Run("errors on missing repo root", func(t *testing.T) {
-		_, err := Scan(filepath.Join(t.TempDir(), "does-not-exist"))
+		_, err := Scan(filepath.Join(t.TempDir(), "does-not-exist"), testRedactor())
 		if err == nil {
 			t.Fatal("expected error for missing repo root, got nil")
+		}
+	})
+
+	// Phase 04 requirement (docs/phases/04-config-and-safety.md): Privacy.Ignore
+	// globs must drop a matching file before it's ever read, not merely keep
+	// its content out of the final prompt. The assertion that matters here
+	// is f.Files[...] being entirely absent, not just short/redacted — a
+	// present-but-redacted entry would mean the bytes were read into memory
+	// at all, which is the thing this rule exists to prevent.
+	t.Run("drops ignored files before reading them", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, "README.md"), "# Project\nordinary readme content")
+		writeFile(t, filepath.Join(root, ".env"), "API_KEY=sk-shouldneverberead1234567890")
+		writeFile(t, filepath.Join(root, "secrets", "creds.txt"), "shouldneverberead")
+		writeFile(t, filepath.Join(root, "docs", "scribe", "PROJECT.md"), "existing docs content")
+
+		r := redact.New(nil, []string{"**/.env*", "**/secrets/**"})
+		f, err := Scan(root, r)
+		if err != nil {
+			t.Fatalf("Scan: %v", err)
+		}
+
+		if _, ok := f.Files[".env"]; ok {
+			t.Errorf("expected .env dropped entirely, got it in Files: %v", f.Files)
+		}
+		if _, ok := f.Files["secrets/creds.txt"]; ok {
+			t.Errorf("expected secrets/creds.txt dropped entirely, got it in Files: %v", f.Files)
+		}
+		if strings.Contains(f.Tree, ".env") {
+			t.Errorf("expected .env absent from the tree too, got:\n%s", f.Tree)
+		}
+		if strings.Contains(f.Tree, "secrets") {
+			t.Errorf("expected the secrets/ directory not even walked, got:\n%s", f.Tree)
+		}
+		if !strings.Contains(f.Files["README.md"], "ordinary readme content") {
+			t.Errorf("expected README.md (not ignored) to still be read, got %v", f.Files)
+		}
+	})
+
+	t.Run("nil secretIgnore is an error, not a silent skip", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, "README.md"), "hi")
+		if _, err := Scan(root, nil); err == nil {
+			t.Fatal("expected Scan(root, nil) to error rather than silently read everything")
 		}
 	})
 }
@@ -189,7 +241,7 @@ func TestProjectPrompt(t *testing.T) {
 			"go.mod":    "module foo",
 		},
 	}
-	p := ProjectPrompt(f)
+	p := ProjectPrompt(f, testRedactor())
 
 	for _, want := range []string{"/repo", "main.go", "README.md", "hello", "go.mod", "module foo", "PROJECT.md", "Prefer saying less"} {
 		if !strings.Contains(p, want) {
@@ -212,13 +264,66 @@ func TestDecisionsPrompt(t *testing.T) {
 			"go.mod":    "module foo",
 		},
 	}
-	p := DecisionsPrompt(f)
+	p := DecisionsPrompt(f, testRedactor())
 
 	for _, want := range []string{"/repo", "main.go", "README.md", "hello", "go.mod", "module foo", "DECISIONS.md", "none are\nrecorded yet"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("expected decisions prompt to contain %q, got:\n%s", want, p)
 		}
 	}
+}
+
+// TestRedactionChokePointCoversEveryPromptBuilder is this package's half of
+// the phase 04 requirement (docs/phases/04-config-and-safety.md): a test
+// that fails if a prompt builder in this package learns a second way to
+// reach repo content, bypassing internal/redact. Both builders this
+// package owns are enumerated here by name. The secret is planted in a
+// scanned file's *content*, not its path, so this specifically exercises
+// the redaction pass in prompt.go rather than the Ignore-glob file
+// dropping already covered by TestScan's "drops ignored files" case.
+func TestRedactionChokePointCoversEveryPromptBuilder(t *testing.T) {
+	const secret = "sk-supersecretvalue1234567890abcdef"
+	r := testRedactor()
+
+	f := Facts{
+		RepoRoot: "/repo",
+		Tree:     "main.go\n",
+		Files: map[string]string{
+			"README.md": "setup: api_key=" + secret,
+		},
+	}
+
+	rendered := map[string]string{
+		"ProjectPrompt":   ProjectPrompt(f, r),
+		"DecisionsPrompt": DecisionsPrompt(f, r),
+	}
+
+	for name, prompt := range rendered {
+		if strings.Contains(prompt, secret) {
+			t.Errorf("%s leaked the planted secret into the rendered prompt:\n%s", name, prompt)
+		}
+		if !strings.Contains(prompt, "[redacted:") {
+			t.Errorf("%s shows no redaction placeholder — expected the planted secret to be caught, got:\n%s", name, prompt)
+		}
+	}
+}
+
+func TestProjectPromptPanicsOnNilRedactor(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected ProjectPrompt with a nil Redactor to panic")
+		}
+	}()
+	ProjectPrompt(Facts{RepoRoot: "/repo"}, nil)
+}
+
+func TestDecisionsPromptPanicsOnNilRedactor(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected DecisionsPrompt with a nil Redactor to panic")
+		}
+	}()
+	DecisionsPrompt(Facts{RepoRoot: "/repo"}, nil)
 }
 
 func TestParseProject(t *testing.T) {
@@ -290,7 +395,7 @@ func TestRun(t *testing.T) {
 		writeFile(t, filepath.Join(root, "README.md"), "# Thing")
 
 		w := &fakeWriter{responses: []string{"seeded project", "seeded decisions"}}
-		got, err := Run(root, w)
+		got, err := Run(root, w, testRedactor())
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -324,7 +429,7 @@ func TestRun(t *testing.T) {
 	t.Run("propagates writer error on the project call", func(t *testing.T) {
 		root := t.TempDir()
 		w := &fakeWriter{err: errors.New("boom")}
-		_, err := Run(root, w)
+		_, err := Run(root, w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from writer failure")
 		}
@@ -336,7 +441,7 @@ func TestRun(t *testing.T) {
 	t.Run("propagates writer error on the decisions call", func(t *testing.T) {
 		root := t.TempDir()
 		w := &fakeWriter{out: "seeded project", errs: map[int]error{1: errors.New("boom")}}
-		_, err := Run(root, w)
+		_, err := Run(root, w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from writer failure on the second call")
 		}
@@ -348,7 +453,7 @@ func TestRun(t *testing.T) {
 	t.Run("propagates parse error on empty writer output", func(t *testing.T) {
 		root := t.TempDir()
 		w := &fakeWriter{out: ""}
-		_, err := Run(root, w)
+		_, err := Run(root, w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from empty writer output")
 		}
@@ -356,7 +461,7 @@ func TestRun(t *testing.T) {
 
 	t.Run("propagates scan error on bad repo root", func(t *testing.T) {
 		w := &fakeWriter{responses: []string{"x", "y"}}
-		_, err := Run(filepath.Join(t.TempDir(), "missing"), w)
+		_, err := Run(filepath.Join(t.TempDir(), "missing"), w, testRedactor())
 		if err == nil {
 			t.Fatal("expected error from missing repo root")
 		}

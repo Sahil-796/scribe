@@ -26,6 +26,7 @@ See docs/PLAN.md for the full design.`,
 		newOnCmd(),
 		newOffCmd(),
 		newDoctorCmd(),
+		newNudgeCmd(),
 	)
 
 	return root

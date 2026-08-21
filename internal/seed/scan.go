@@ -15,6 +15,7 @@ package seed
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -108,7 +110,27 @@ var manifestNames = []string{
 // walking repoRoot itself, and symlinks that would escape it are skipped
 // (see walkTree). It never touches ~/.claude/ or any other user directory —
 // the seed pass has no business with agent state, only repo state.
-func Scan(repoRoot string) (Facts, error) {
+//
+// secretIgnore is install.PrivacyConfig.Ignore's globs (**/.env*,
+// **/secrets/**, ...), wrapped in a *redact.Redactor for its IgnoreFile
+// glob matcher — see internal/redact. It is checked here, before a
+// matching file is ever opened, not after: phase 04's requirement (see
+// docs/phases/04-config-and-safety.md, "Ignore globs must drop whole
+// files ... before they are read") is stronger than "redact whatever an
+// ignored file contains" — a file matching Ignore should never have its
+// bytes enter this process's memory as file content at all. secretIgnore
+// is required for the same reason Deps.Redactor is required in
+// internal/worker: a nil value here would silently read every ignored
+// file, and that failure mode is invisible and permanent. This is a
+// second, independent filter from the repo's own .gitignore (loaded
+// below) — .gitignore keeps build noise out of the tree/facts, Ignore
+// keeps secrets out full stop, and neither should be asked to do the
+// other's job.
+func Scan(repoRoot string, secretIgnore *redact.Redactor) (Facts, error) {
+	if secretIgnore == nil {
+		return Facts{}, errors.New("seed: Scan requires a non-nil secretIgnore Redactor (a nil value would silently read every file, including ones the repo's Privacy.Ignore globs say to skip)")
+	}
+
 	abs, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return Facts{}, fmt.Errorf("seed: resolve repo root %s: %w", repoRoot, err)
@@ -128,7 +150,7 @@ func Scan(repoRoot string) (Facts, error) {
 		Files:    make(map[string]string),
 	}
 
-	tree, err := walkTree(abs, ignore)
+	tree, err := walkTree(abs, ignore, secretIgnore)
 	if err != nil {
 		return Facts{}, fmt.Errorf("seed: walk directory tree: %w", err)
 	}
@@ -139,6 +161,11 @@ func Scan(repoRoot string) (Facts, error) {
 		if budget <= 0 {
 			return
 		}
+		if secretIgnore.IgnoreFile(rel) {
+			// Dropped before the read, per the doc comment above — not
+			// read-then-discarded.
+			return
+		}
 		content, ok := readCapped(filepath.Join(abs, rel), budget)
 		if !ok {
 			return
@@ -147,15 +174,15 @@ func Scan(repoRoot string) (Facts, error) {
 		budget -= len(content)
 	}
 
-	for _, rel := range findReadmes(abs, ignore) {
+	for _, rel := range findReadmes(abs, ignore, secretIgnore) {
 		addFile(rel)
 	}
 	for _, name := range manifestNames {
 		if _, err := os.Stat(filepath.Join(abs, name)); err == nil {
-			addFile(name)
+			addFile(name) // addFile itself checks secretIgnore before reading
 		}
 	}
-	for _, rel := range findExistingDocs(abs) {
+	for _, rel := range findExistingDocs(abs, secretIgnore) {
 		addFile(rel)
 	}
 
@@ -184,7 +211,7 @@ func readCapped(path string, budget int) (string, bool) {
 // findReadmes returns top-level README files (any case, any extension),
 // relative to root. Scoped to the repo root only — a README three levels
 // deep belongs to a subpackage, not the project as a whole.
-func findReadmes(root string, ignore *gitignore) []string {
+func findReadmes(root string, ignore *gitignore, secretIgnore *redact.Redactor) []string {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return nil
@@ -195,7 +222,7 @@ func findReadmes(root string, ignore *gitignore) []string {
 			continue
 		}
 		name := e.Name()
-		if ignore.matches(name) {
+		if ignore.matches(name) || secretIgnore.IgnoreFile(name) {
 			continue
 		}
 		if strings.HasPrefix(strings.ToUpper(name), "README") {
@@ -210,7 +237,7 @@ func findReadmes(root string, ignore *gitignore) []string {
 // repo (docs/scribe/*.md), so a re-run of init on a repo that already has
 // some history isn't starting from nothing. Missing directory is not an
 // error — most repos running init for the first time won't have one yet.
-func findExistingDocs(root string) []string {
+func findExistingDocs(root string, secretIgnore *redact.Redactor) []string {
 	dir := filepath.Join(root, scribe.DocsDir)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -221,7 +248,11 @@ func findExistingDocs(root string) []string {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".md") {
 			continue
 		}
-		out = append(out, filepath.ToSlash(filepath.Join(scribe.DocsDir, e.Name())))
+		rel := filepath.ToSlash(filepath.Join(scribe.DocsDir, e.Name()))
+		if secretIgnore.IgnoreFile(rel) {
+			continue
+		}
+		out = append(out, rel)
 	}
 	sort.Strings(out)
 	return out
@@ -232,7 +263,7 @@ func findExistingDocs(root string) []string {
 // maxTreeEntries is reached so a huge repo can't make the tree unbounded,
 // and it never follows symlinks — a symlink pointing outside root must not
 // let the scan read outside repoRoot.
-func walkTree(root string, ignore *gitignore) (string, error) {
+func walkTree(root string, ignore *gitignore, secretIgnore *redact.Redactor) (string, error) {
 	var b strings.Builder
 	count := 0
 	truncated := false
@@ -257,11 +288,18 @@ func walkTree(root string, ignore *gitignore) (string, error) {
 				rel = relDir + "/" + name
 			}
 
+			// secretIgnore is checked against rel (the path from repo root)
+			// rather than just name, so a glob like "**/secrets/**" or
+			// "**/.env*" matches regardless of depth — and, for a
+			// directory, matching here means the walk never descends into
+			// it at all (see matchGlob's zero-segment "**" case in
+			// internal/redact: "**/secrets/**" matches the bare segment
+			// "secrets" too, not just its contents).
 			if e.IsDir() {
-				if noiseDirs[name] || ignore.matches(name) {
+				if noiseDirs[name] || ignore.matches(name) || secretIgnore.IgnoreFile(rel) {
 					continue
 				}
-			} else if ignore.matches(name) {
+			} else if ignore.matches(name) || secretIgnore.IgnoreFile(rel) {
 				continue
 			}
 

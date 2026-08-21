@@ -3,6 +3,7 @@ package seed
 import (
 	"fmt"
 
+	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -24,13 +25,21 @@ import (
 // point asking for DECISIONS.md if init is going to fail anyway, and it
 // keeps a scan/writer failure here reported the same way seed.Run always
 // has (name the doc, wrap the error, return nothing).
-func Run(repoRoot string, w scribe.Writer) (map[scribe.Doc]string, error) {
-	facts, err := Scan(repoRoot)
+// The redactor is required, not optional. Seeding reads the repo itself —
+// README, package files, existing docs — and a repo is exactly where a
+// committed .env or a key pasted into a config file lives. A nil here would
+// mean the one pass that reads the most files reads them unfiltered.
+func Run(repoRoot string, w scribe.Writer, r *redact.Redactor) (map[scribe.Doc]string, error) {
+	if r == nil {
+		return nil, fmt.Errorf("seed: a redactor is required — seeding reads the repo and must never send it unredacted")
+	}
+
+	facts, err := Scan(repoRoot, r)
 	if err != nil {
 		return nil, fmt.Errorf("seed: scan %s: %w", repoRoot, err)
 	}
 
-	projectOut, err := w.Run(ProjectPrompt(facts))
+	projectOut, err := w.Run(ProjectPrompt(facts, r))
 	if err != nil {
 		return nil, fmt.Errorf("seed: writer run (PROJECT.md): %w", err)
 	}
@@ -39,7 +48,7 @@ func Run(repoRoot string, w scribe.Writer) (map[scribe.Doc]string, error) {
 		return nil, fmt.Errorf("seed: parse writer output (PROJECT.md): %w", err)
 	}
 
-	decisionsOut, err := w.Run(DecisionsPrompt(facts))
+	decisionsOut, err := w.Run(DecisionsPrompt(facts, r))
 	if err != nil {
 		return nil, fmt.Errorf("seed: writer run (DECISIONS.md): %w", err)
 	}
