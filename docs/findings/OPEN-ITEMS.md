@@ -1,4 +1,15 @@
-# Open items — as of phase 05
+# Open items — as of phase 06
+
+**Phase 06 shipped** (`docs/phases/06-teammates.md`) on `phase-06-teammates`:
+the two history layouts (`internal/layout`) and best-effort authorship
+(`internal/attribution`) landed as pure packages, and this phase wired them
+into the live pipeline — `docs.Store` is now layout-aware via `WriteHistory`
+(shared byline-append, or per-session file + regenerated rollup), the worker
+stamps each history write with the run's author and primary-session metadata,
+`scribe run` builds the store from the repo's configured layout, and the
+onboarding wizard asks the layout question again (reversing item 31). New item
+from phase 06: **37** (replay/seed history writes don't yet respect the
+per-session layout — the main follow-up, entangled with item 36).
 
 **Phase 05 shipped** (`docs/phases/05-digest-index.md`) on
 `phase-05-digest-index`, branched off `phase-04-config-safety` (which is still
@@ -213,6 +224,30 @@ decision (every replayed session pays a call, or a cheaper shared pass?). The
 backfill machinery is already built — `digest.MaybeWrite` fills any missing
 past week — so the moment replay upserts records, the digests materialise on
 the next run. Not a defect in shipped code; a bounded follow-up.
+
+### 37. `scribe init`'s replay/seed history writes ignore the per-session layout
+
+Phase 06 (`docs/phases/06-teammates.md`) made the *live* worker loop
+layout-aware: `docs.Store.WriteHistory` writes one file per session under
+`changelog/`/`journal/` and regenerates the top-level rollup in per-session
+mode. But `scribe init`'s seed and replay passes still call the store's
+shared-style append path (`AppendHistory`), so a freshly-onboarded repo's
+back-history lands in a single shared `CHANGELOG.md`/`JOURNAL.md` even when the
+repo chose per-session — exactly the layout that phase's default. The rollup is
+regenerated only when the live loop next writes, so until then the top-level
+doc and any per-session files disagree.
+
+Deferred deliberately, and entangled with item 36: replay is the same pass that
+doesn't yet write session records, and both are "make replay speak the current
+per-session contracts" work. The clean fix is for replay to route its history
+writes through `WriteHistory` with a `SessionMeta` per reconstructed session
+(which it must synthesise anyway for item 36), so seed/replay and the live loop
+produce identical on-disk shapes. Until then, a per-session repo onboarded from
+history has a shared-shaped back-history that only converges to per-session as
+new sessions land. Bounded, and no data is lost — the entries are all present,
+just in the shared file rather than split — but it means "conflict-free by
+construction" doesn't hold for the replayed prefix. This is the main phase 06
+follow-up.
 
 ## Process notes
 
