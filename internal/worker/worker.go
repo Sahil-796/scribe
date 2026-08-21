@@ -35,7 +35,9 @@ import (
 	"io"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/attribution"
 	"github.com/Sahil-796/scribe/internal/docs"
+	"github.com/Sahil-796/scribe/internal/layout"
 	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
@@ -57,7 +59,14 @@ type Queue interface {
 type DocStore interface {
 	ReadAll() (map[scribe.Doc]string, error)
 	WriteState(doc scribe.Doc, content string) error
-	AppendHistory(doc scribe.Doc, entry string) error
+
+	// WriteHistory records one CHANGELOG/JOURNAL entry, crediting author and
+	// tagging it with the run's session metadata. It replaces the worker's
+	// old direct AppendHistory call: the store now owns the phase-06 layout
+	// choice (shared byline-append vs per-session file + rollup), so the
+	// worker hands it the raw entry plus who and which session, and the store
+	// decides how that lands on disk. See internal/docs's WriteHistory.
+	WriteHistory(doc scribe.Doc, meta layout.SessionMeta, author attribution.Author, entry string) error
 
 	// ResetRun starts a fresh before/after snapshot for `scribe diff`.
 	// Part of the interface rather than an optional type assertion on the
@@ -363,7 +372,22 @@ func runOnce(deps Deps) error {
 		return finishRun(deps, offsetsToSave, order, entriesBySession)
 	}
 
-	if err := applyEdits(deps.Docs, docEdits); err != nil {
+	// Attribution and session metadata for this run's history writes. Both are
+	// derived from the run's primary session — the first id in order (the
+	// first trigger we drained). A coalesced multi-session run writes its one
+	// history entry per doc under that primary session id; that's acceptable
+	// and, in per-session layout, conflict-free by construction (one path per
+	// session id). author is resolved once here, not per doc: it's the same
+	// person for the whole run, and Resolve never fails (see
+	// internal/attribution). Summary is left empty in the base meta — the
+	// phase-05 per-session summary isn't computed until finishRun, so
+	// applyEdits derives a readable slug from each entry's own first line
+	// instead (see applyEdits).
+	primary := order[0]
+	author := attribution.Resolve(bySession[primary].RepoRoot)
+	baseMeta := layout.SessionMeta{Date: deps.now(), SessionID: primary}
+
+	if err := applyEdits(deps.Docs, docEdits, baseMeta, author); err != nil {
 		return fmt.Errorf("worker: apply edits: %w", err)
 	}
 

@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Sahil-796/scribe/internal/attribution"
 	"github.com/Sahil-796/scribe/internal/docs"
+	"github.com/Sahil-796/scribe/internal/layout"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
 
@@ -56,11 +58,19 @@ func stripCodeFence(s string) string {
 }
 
 // applyEdits writes each changed doc via the method its kind requires —
-// WriteState for current-state docs, AppendHistory for history docs — so
+// WriteState for current-state docs, WriteHistory for history docs — so
 // the append-only guarantee for CHANGELOG/JOURNAL holds no matter what the
 // writer returned. Iterates in scribe.AllDocs order for deterministic
 // behavior (matters for test assertions and for reading log output).
-func applyEdits(store DocStore, e edits) error {
+//
+// baseMeta and author identify the run's primary session and who ran it (see
+// runOnce). State-doc writes ignore both — PROJECT/DECISIONS are shared,
+// rewritten in place, never split per session and never bylined. Each history
+// write gets its own copy of baseMeta with the Summary filled from that
+// entry's first line, so the per-session file's name is readable (the session
+// id suffix, not the slug, is what actually keeps paths unique — an empty
+// slug is fine).
+func applyEdits(store DocStore, e edits, baseMeta layout.SessionMeta, author attribution.Author) error {
 	for _, d := range scribe.AllDocs {
 		content, ok := e[d]
 		if !ok || content == "" {
@@ -72,9 +82,31 @@ func applyEdits(store DocStore, e edits) error {
 			}
 			continue
 		}
-		if err := store.AppendHistory(d, content); err != nil {
+		meta := baseMeta
+		meta.Summary = firstMarkdownLine(content)
+		if err := store.WriteHistory(d, meta, author, content); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// firstMarkdownLine returns the first non-blank line of a history entry with
+// leading markdown list/heading markers stripped, to seed a readable filename
+// slug (layout.Slug is applied to it downstream). It's a best-effort
+// readability hint only — layout.SessionFilePath tolerates an empty result and
+// falls back to the session-id suffix alone — so anything it can't make sense
+// of simply yields "".
+func firstMarkdownLine(entry string) string {
+	for _, line := range strings.Split(entry, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		// Drop a leading run of markdown markers ("#", "-", "*", ">", spaces)
+		// so a bullet or heading contributes its words, not its punctuation.
+		trimmed = strings.TrimLeft(trimmed, "#-*>+ \t")
+		return trimmed
+	}
+	return ""
 }

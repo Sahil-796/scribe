@@ -19,9 +19,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/attribution"
 	"github.com/Sahil-796/scribe/internal/docs"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
+
+// stampForRepo mirrors exactly what the worker's shared-mode history write
+// does to an entry before it lands on disk: credit whoever attribution
+// resolves for RepoRoot "/repo". Computing the expected block through the same
+// functions the production path uses keeps the conservation assertions below
+// deterministic on any machine — the byline is whatever this repo/host
+// resolves to, and both sides agree because both call Resolve + StampShared.
+func stampForRepo(entry string) string {
+	return attribution.StampShared(entry, attribution.Resolve("/repo"))
+}
 
 // runOneWorkerCycle drives exactly one Run() over a real docs.Store: it
 // appends one new transcript entry for session s1, wires up a fresh
@@ -147,7 +158,7 @@ func TestRotationFiresRepeatedlyThroughWorkerRunAndConservesAllBytes(t *testing.
 	for i := 0; i < cycles; i++ {
 		entry := entryText(i)
 		runOneWorkerCycle(t, store, tr, i, entry)
-		appended = append(appended, entry)
+		appended = append(appended, stampForRepo(entry))
 	}
 
 	// Rotation must actually have fired — otherwise this test would be
@@ -185,7 +196,7 @@ func TestRotationAcrossMonthBoundaryThroughWorkerRunConservesAllBytes(t *testing
 	for i := 0; i < beforeBoundary; i++ {
 		entry := entryText(i)
 		runOneWorkerCycle(t, store, tr, i, entry)
-		appended = append(appended, entry)
+		appended = append(appended, stampForRepo(entry))
 	}
 
 	store.Now = func() time.Time { return august }
@@ -194,7 +205,7 @@ func TestRotationAcrossMonthBoundaryThroughWorkerRunConservesAllBytes(t *testing
 	for i := beforeBoundary; i < beforeBoundary+afterBoundary; i++ {
 		entry := entryText(i)
 		runOneWorkerCycle(t, store, tr, i, entry)
-		appended = append(appended, entry)
+		appended = append(appended, stampForRepo(entry))
 	}
 
 	archiveDir := filepath.Join(root, scribe.DocsDir, "archive")

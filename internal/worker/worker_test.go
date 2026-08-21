@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sahil-796/scribe/internal/attribution"
+	"github.com/Sahil-796/scribe/internal/layout"
 	"github.com/Sahil-796/scribe/internal/redact"
 	"github.com/Sahil-796/scribe/internal/scribe"
 )
@@ -93,12 +95,21 @@ type fakeDocStore struct {
 	// resetRuns counts ResetRun calls; see the method below.
 	resetRuns int
 	resetErr  error
+
+	// historyMeta / historyAuthor capture the layout metadata and author of
+	// the most recent WriteHistory call per doc, so a test can assert the
+	// worker wired the run's primary session and resolved author through (see
+	// TestRunWiresSessionMetadataAndAuthorIntoHistory).
+	historyMeta   map[scribe.Doc]layout.SessionMeta
+	historyAuthor map[scribe.Doc]attribution.Author
 }
 
 func newFakeDocStore() *fakeDocStore {
 	return &fakeDocStore{
-		state:   map[scribe.Doc]string{},
-		history: map[scribe.Doc][]string{},
+		state:         map[scribe.Doc]string{},
+		history:       map[scribe.Doc][]string{},
+		historyMeta:   map[scribe.Doc]layout.SessionMeta{},
+		historyAuthor: map[scribe.Doc]attribution.Author{},
 	}
 }
 
@@ -137,13 +148,21 @@ func (f *fakeDocStore) ResetRun() error {
 	return f.resetErr
 }
 
-func (f *fakeDocStore) AppendHistory(doc scribe.Doc, entry string) error {
+// WriteHistory records the raw entry it was handed, ignoring the layout
+// metadata and author — the fake exists to check the worker's ordering and
+// which entries reach the store, not to reproduce internal/docs's on-disk
+// layout (the rotation integration test drives a real *docs.Store for that).
+// Recording the entry verbatim keeps existing assertions on store.history
+// (which compare against the writer's exact output) honest.
+func (f *fakeDocStore) WriteHistory(doc scribe.Doc, meta layout.SessionMeta, author attribution.Author, entry string) error {
 	if f.writeErr != nil {
 		return f.writeErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.history[doc] = append(f.history[doc], entry)
+	f.historyMeta[doc] = meta
+	f.historyAuthor[doc] = author
 	return nil
 }
 
@@ -265,6 +284,53 @@ func TestRunProcessesTriggerAndAdvancesOffsetOnSuccess(t *testing.T) {
 	}
 	if w.calls != 2 {
 		t.Fatalf("expected exactly 2 writer calls (CHANGELOG, JOURNAL — no gate keyword, so PROJECT/DECISIONS skipped), got %d", w.calls)
+	}
+}
+
+// TestRunWiresSessionMetadataAndAuthorIntoHistory proves the phase-06 wiring:
+// a history write carries the run's primary session id, a readable slug
+// derived from the entry's own first line, and the author attribution resolves
+// for the repo. The author is compared against attribution.Resolve on the same
+// RepoRoot so the assertion is deterministic regardless of the host's git
+// identity — both sides call the same resolver.
+func TestRunWiresSessionMetadataAndAuthorIntoHistory(t *testing.T) {
+	q := &fakeQueue{drainQueue: [][]scribe.Trigger{
+		{{SessionID: "s1", TranscriptPath: "/repo/t1", RepoRoot: "/repo"}},
+	}}
+	tr := newFakeTranscript()
+	tr.entries["/repo/t1"] = []scribe.Entry{{Role: "user", Text: "hello"}}
+
+	store := newFakeDocStore()
+	w := &fakeWriter{outputs: []string{"- reworked the auth flow", noChangeSentinel}}
+
+	fixedNow := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	deps := Deps{
+		Queue: q, Docs: store, Writer: w,
+		ReadTranscript: tr.Read, LoadOffset: tr.LoadOffset, SaveOffset: tr.SaveOffset,
+		Redactor: testRedactor(),
+		Now:      func() time.Time { return fixedNow },
+	}
+
+	if err := Run(deps); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	meta := store.historyMeta[scribe.DocChangelog]
+	if meta.SessionID != "s1" {
+		t.Errorf("history meta SessionID = %q, want the primary session %q", meta.SessionID, "s1")
+	}
+	if !meta.Date.Equal(fixedNow) {
+		t.Errorf("history meta Date = %v, want deps.now() %v", meta.Date, fixedNow)
+	}
+	// Summary is the entry's first line with the leading "- " bullet stripped,
+	// so the per-session filename slug is readable.
+	if meta.Summary != "reworked the auth flow" {
+		t.Errorf("history meta Summary = %q, want the entry's first line %q", meta.Summary, "reworked the auth flow")
+	}
+
+	wantAuthor := attribution.Resolve("/repo")
+	if store.historyAuthor[scribe.DocChangelog] != wantAuthor {
+		t.Errorf("history author = %+v, want attribution.Resolve(\"/repo\") = %+v", store.historyAuthor[scribe.DocChangelog], wantAuthor)
 	}
 }
 
