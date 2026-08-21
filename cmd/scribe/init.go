@@ -155,10 +155,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		// onboarding question the wizard asks (docs in git) has no answer
 		// here, so it takes the conservative default — docs stay out of
 		// git — and --docs-in-git lets a script say otherwise explicitly.
-		// Layout has no flag at all (OPEN-ITEMS item 31): phase 06, the only
-		// thing that would read it, doesn't exist, so it's always the
-		// recorded default rather than something a script can (wrongly)
-		// believe it's choosing.
+		// Layout has no flag: phase 06 re-added the layout question to the
+		// interactive wizard, but a non-interactive init takes the
+		// conflict-free per-session default rather than exposing yet another
+		// flag. A script that genuinely wants shared can set config.json's
+		// "layout" directly.
 		answers = wizard.Answers{
 			Agent:     firstNonEmpty(agentFlag, wizard.DefaultAgent),
 			Model:     firstNonEmpty(modelFlag, wizard.DefaultModel),

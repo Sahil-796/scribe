@@ -55,9 +55,11 @@ func TestAsk_PTY_HappyPath_ReturnsActualChoices(t *testing.T) {
 	s.Send(keyEnter) // commit, submit group 2 (Model is the last field)
 
 	// modelChoice != ModelOther, so the "Model name" group stays hidden and
-	// we land straight on "Commit the docs to git?" — accept the default
-	// (No / keep them out). No Layout question in between: item 31 removed
-	// it (see wizard.go's Layout doc comment).
+	// we land on the phase-06 "History layout" select (keep per-session) and
+	// then "Commit the docs to git?" — accept the default (No / keep out).
+	s.WaitForFocused("History layout", ptyTimeout)
+	s.Send(keyEnter) // keep the per-session default, advance to the docs-in-git confirm
+
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)
 
@@ -80,6 +82,51 @@ func TestAsk_PTY_HappyPath_ReturnsActualChoices(t *testing.T) {
 	}
 	if got.answers != want {
 		t.Fatalf("Ask() = %+v, want %+v (the whole point of this test is that these are the OPERATOR'S choices, not the seeded defaults)", got.answers, want)
+	}
+}
+
+// TestAsk_PTY_LayoutSelect_Shared proves the phase-06 history-layout question
+// is a real select whose answer flows through to Answers.Layout — moving the
+// cursor off the pre-selected per-session default and onto "shared" must make
+// Ask report LayoutShared, not silently return the default. This is the layout
+// analogue of the model-select test: a bug that never wired the select's Value
+// pointer (or read the wrong variable at the end) would return per-session
+// regardless, so picking the non-default option is what makes the test honest.
+func TestAsk_PTY_LayoutSelect_Shared(t *testing.T) {
+	s := newPTYSession(t)
+
+	type result struct {
+		answers Answers
+		err     error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		a, err := Ask(Options{RepoRoot: "/repo"})
+		resCh <- result{a, err}
+	}()
+
+	s.WaitFor("scribe init", ptyTimeout)
+	s.Send(keyEnter)
+	s.WaitForFocused("Agent", ptyTimeout)
+	s.Send(keyEnter) // keep default agent
+	s.WaitForFocused("Model", ptyTimeout)
+	s.Send(keyEnter) // keep default model
+
+	s.WaitForFocused("History layout", ptyTimeout)
+	s.Send(keyDown)  // per-session -> shared
+	s.Send(keyEnter) // commit "shared", advance to the docs-in-git confirm
+
+	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
+	s.Send(keyEnter)
+	s.WaitForFocused("Run the seed and replay passes now?", ptyTimeout)
+	s.Send(keyEnter)
+
+	got := waitOnResult(t, resCh, ptyTimeout, func() string { return s.snapshot() })
+	if got.err != nil {
+		t.Fatalf("Ask() error = %v, want nil", got.err)
+	}
+	if got.answers.Layout != LayoutShared {
+		t.Fatalf("Layout = %q, want %q (the operator picked shared, not the per-session default)", got.answers.Layout, LayoutShared)
 	}
 }
 
@@ -112,6 +159,9 @@ func TestAsk_PTY_ModelSelect_GradedModel(t *testing.T) {
 
 	// The hidden group must actually stay hidden: assert we're on "Commit
 	// the docs to git?", never having seen "Model name" in between.
+	s.WaitForFocused("History layout", ptyTimeout)
+	s.Send(keyEnter) // keep the per-session default, advance to the docs-in-git confirm
+
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.AssertNotContaining("Model name")
 	s.Send(keyEnter)
@@ -160,6 +210,9 @@ func TestAsk_PTY_ModelSelect_CustomModel(t *testing.T) {
 	s.WaitForFocused("Model name", ptyTimeout)
 	s.Send("opencode/my-custom-model")
 	s.Send(keyEnter)
+
+	s.WaitForFocused("History layout", ptyTimeout)
+	s.Send(keyEnter) // keep the per-session default, advance to the docs-in-git confirm
 
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)
@@ -212,6 +265,9 @@ func TestAsk_PTY_NonGradedDefaultModel_PrePopulatesCustomField(t *testing.T) {
 	s.WaitForFocused("Model name", ptyTimeout)
 	s.WaitFor(preset, ptyTimeout)
 	s.Send(keyEnter) // accept the pre-filled value as-is
+
+	s.WaitForFocused("History layout", ptyTimeout)
+	s.Send(keyEnter) // keep the per-session default, advance to the docs-in-git confirm
 
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)
@@ -272,6 +328,9 @@ func TestAsk_PTY_CustomModelValidation_RejectsEmpty(t *testing.T) {
 	// completes — proves this was a real validation gate, not a hang.
 	s.Send("opencode/now-valid")
 	s.Send(keyEnter)
+	s.WaitForFocused("History layout", ptyTimeout)
+	s.Send(keyEnter) // keep the per-session default, advance to the docs-in-git confirm
+
 	s.WaitForFocused("Commit the docs to git?", ptyTimeout)
 	s.Send(keyEnter)
 	s.WaitForFocused("Run the seed and replay passes now?", ptyTimeout)

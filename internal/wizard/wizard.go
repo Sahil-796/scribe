@@ -75,14 +75,13 @@ var GradedModels = []struct{ ID, Note string }{
 // that happened to be graded once.
 const ModelOther = "other"
 
-// Layout is how a repo's docs are organised across the people working in it.
-// The answer is genuinely per-repo — a solo repo and a shared one want
-// different things — but it is deliberately NOT asked at onboarding (see
-// Ask): PLAN.md's phase 06, the only code that would ever read this, doesn't
-// exist yet, and an answer given against semantics nobody has written down
-// is worse than no answer at all — it's silently wrong instead of visibly
-// absent (OPEN-ITEMS item 31). Kept as a type, with LayoutPerSession as the
-// recorded default, purely as the vocabulary phase 06 will need.
+// Layout is how a repo's two history docs are organised across the people
+// working in it. The answer is genuinely per-repo — a solo repo and a shared
+// one want different things — so phase 06 (which built the layout semantics in
+// internal/layout and made docs.Store honour them) re-adds the question at
+// onboarding, reversing OPEN-ITEMS item 31's temporary removal. LayoutPerSession
+// is the default: it is conflict-free by construction, which is the whole
+// reason the layout exists.
 type Layout string
 
 const (
@@ -102,8 +101,8 @@ type Answers struct {
 	// DocsInGit is whether the docs are committed to the repo or kept out of
 	// it via .gitignore. Asked rather than assumed (OPEN-ITEMS item 3).
 	DocsInGit bool
-	// Layout is never asked (see the Layout type doc) — always
-	// LayoutPerSession until phase 06 exists to give the question meaning.
+	// Layout is the per-repo history layout chosen at onboarding (phase 06):
+	// LayoutPerSession (default, conflict-free) or LayoutShared.
 	Layout  Layout
 	Proceed bool
 }
@@ -234,11 +233,10 @@ func Ask(o Options) (Answers, error) {
 	docsDir := o.DocsDir
 	proceed := true
 	docsInGit := false
-	// layout is never asked (see the comment on the "Commit the docs to
-	// git?" group below) — it's fixed at the default so the field exists
-	// in Answers/Config for phase 06 without recording an answer against
-	// semantics that don't exist yet.
-	layout := LayoutPerSession
+	// layoutChoice is the history layout select's value (phase 06). It
+	// defaults to the conflict-free per-session layout; the string form is
+	// resolved back into a Layout at the end via the select's own values.
+	layoutChoice := string(LayoutPerSession)
 
 	// modelChoice is the select's value; customModel is the free-text field
 	// behind ModelOther. They're resolved into one model at the end.
@@ -293,12 +291,20 @@ func Ask(o Options) (Answers, error) {
 				Validate(huh.ValidateNotEmpty()),
 		).WithHideFunc(func() bool { return modelChoice != ModelOther }),
 		huh.NewGroup(
-			// No "docs layout" field: item 31 (OPEN-ITEMS) removed the
-			// question for the same reason decision 9 removed the docs-dir
-			// one (item 17) — phase 06, the only thing that would ever read
-			// Layout, doesn't exist yet, and a question whose answer does
-			// nothing is worse than no question. layout stays fixed at
-			// LayoutPerSession below rather than being asked here.
+			// Phase 06 re-adds the history layout question (reversing item 31's
+			// temporary removal, now that internal/layout and docs.Store give
+			// it meaning). Per-session is the pre-selected default because it's
+			// conflict-free by construction; shared is the simpler single-file
+			// layout for solo repos that don't mind the occasional merge
+			// conflict on a pull.
+			huh.NewSelect[string]().
+				Title("History layout").
+				Description("How CHANGELOG.md and JOURNAL.md are organised across teammates.").
+				Options(
+					huh.NewOption("per-session — one file per session, conflict-free", string(LayoutPerSession)),
+					huh.NewOption("shared — single files, simpler, conflicts on pull", string(LayoutShared)),
+				).
+				Value(&layoutChoice),
 			huh.NewConfirm().
 				Title("Commit the docs to git?").
 				Description("No keeps "+scribe.DocsDir+" out of the repo via .gitignore.").
@@ -322,7 +328,7 @@ func Ask(o Options) (Answers, error) {
 			// Ctrl+C or Esc (see withAbortKeys): not an error, just "the
 			// user backed out". Report whatever was chosen so far but with
 			// Proceed false.
-			return Answers{Agent: agent, Model: resolveModel(modelChoice, customModel), DocsDir: docsDir, DocsInGit: docsInGit, Layout: layout, Proceed: false}, nil
+			return Answers{Agent: agent, Model: resolveModel(modelChoice, customModel), DocsDir: docsDir, DocsInGit: docsInGit, Layout: Layout(layoutChoice), Proceed: false}, nil
 		}
 		return Answers{}, fmt.Errorf("wizard: setup form: %w", err)
 	}
@@ -332,7 +338,7 @@ func Ask(o Options) (Answers, error) {
 		Model:     resolveModel(modelChoice, customModel),
 		DocsDir:   docsDir,
 		DocsInGit: docsInGit,
-		Layout:    layout,
+		Layout:    Layout(layoutChoice),
 		Proceed:   proceed,
 	}, nil
 }
