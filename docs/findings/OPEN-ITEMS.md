@@ -1,4 +1,15 @@
-# Open items — as of phase 06
+# Open items — as of phase 07
+
+**Phase 07 shipped** (`docs/phases/07-claude-md.md`) on `phase-07-claude-md`,
+branched off `phase-06-teammates`: the `/claude-md` Claude Code skill
+(`.claude/skills/claude-md/SKILL.md`) that distils the four `docs/scribe/` docs
+into a short `CLAUDE.md`, behind a hard length ceiling and a diff-before-write
+gate. No Go code — it's a skill, not pipeline (locked decision 5). **This
+completes every phase in `PLAN.md` (00–07); all further work is the backlog
+below, not new phases.** New items from phase 07: **38** (nothing installs the
+skill into an end user's onboarded repo) and **39** (the skill has never been
+run against a real `docs/scribe/` corpus — the item-34 live check, blocked on
+scribe not being onboarded on itself).
 
 **Phase 06 shipped** (`docs/phases/06-teammates.md`) on `phase-06-teammates`:
 the two history layouts (`internal/layout`) and best-effort authorship
@@ -248,6 +259,29 @@ new sessions land. Bounded, and no data is lost — the entries are all present,
 just in the shared file rather than split — but it means "conflict-free by
 construction" doesn't hold for the replayed prefix. This is the main phase 06
 follow-up.
+
+### 38. Nothing installs the `/claude-md` skill into an onboarded repo
+
+Phase 07's skill lives in scribe's own `.claude/skills/claude-md/SKILL.md`, so
+only someone with the scribe checkout can run `/claude-md`. `scribe init`
+installs the Stop hook into `.claude/settings.json` but does not drop this skill
+into the user's `.claude/skills/` — so a freshly-onboarded repo, the exact place
+that has a `docs/scribe/` worth distilling, has no way to invoke it. Bounded
+follow-up: teach `init` (or a small subcommand) to copy the skill file, or
+document a one-line manual install. No design risk — the skill is a single
+static markdown file — just an unbuilt distribution step.
+
+### 39. The `/claude-md` skill has never run against a real `docs/scribe/`
+
+The skill is prose the main model executes, not code under test, and scribe has
+never been onboarded on itself, so there's no local four-doc corpus to run it
+against end to end. Whether the output actually lands under the length ceiling,
+and whether the diff-before-write gate behaves, is reasoned-about, not observed —
+the item-34 lesson (every phase should touch a real run once) applied to phase
+07. Cheap once any repo with a populated `docs/scribe/` exists: onboard it, run
+`/claude-md`, judge the result. Entangled with item 38 only loosely — a manual
+copy of the skill into any onboarded repo is enough to do this check without the
+installer.
 
 ## Process notes
 
